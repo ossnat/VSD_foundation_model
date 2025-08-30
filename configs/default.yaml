@@ -1,0 +1,29 @@
+# Data
+dataset: dummy
+num_videos: 2000 # for dummy dataset only
+frames: 32
+height: 96
+width: 96
+channels: 1
+batch_size: 8
+num_workers: 2
+
+
+# Task
+task: mae # mae | recon (plain autoencoder)
+mask_ratio: 0.5
+patch_size: [4, 8, 8] # t, h, w
+
+
+# Model
+model: cnn3d # cnn3d (encoder) used inside MAE
+embed_dim: 256
+
+
+# Optim
+epochs: 5 # keep tiny for smoke test
+lr: 1e-3
+weight_decay: 0.05
+seed: 42
+log_dir: logs
+ckpt_dir: checkpoints
