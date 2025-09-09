@@ -8,7 +8,7 @@ global:
   output_dtype: "float32"
 
 offline_steps:
-  - name: "chamber_cropper"
+  - name: "ChamberCropper"
     enabled: true
     params:
       detection_method: "hybrid"  # or "adaptive_threshold", "edge_detection"
