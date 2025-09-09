@@ -1,0 +1,21 @@
+# config/preprocessing.yaml
+preprocessing:
+  version: "1.0"
+
+  # Global settings
+  global:
+    input_shape: [256, 100, 100]  # [T, H, W]
+    output_dtype: "float32"
+
+  offline_steps:
+    - name: "chamber_cropper"
+      enabled: true
+      params:
+        detection_method: "hybrid"  # or "adaptive_threshold", "edge_detection"
+        blur_sigma: 2.0
+        min_region_size: 500
+        morphology_kernel_size: 3
+        padding_pixels: 5
+        min_radius: 20  # for edge detection
+        max_radius: 200  # for edge detection
+        save_masks: true  # for debugging
