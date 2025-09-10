@@ -268,6 +268,141 @@ class ChamberCropper(PreprocessingStep):
             'morphology_kernel_size': self.config.get('morphology_kernel_size', 3)
         }
 
+    def _simple_oval_detection(self, image: np.ndarray) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
+        """
+        Simple method to detect oval/circular chamber and zero out edges
+        Preserves original pixel values inside detected contour, zeros outside
+        """
+        h, w = image.shape
+
+        # Method 1: Try to detect actual oval/circular contours
+        detected_contour = self._detect_actual_contour(image)
+
+        if detected_contour is not None:
+            # Use detected contour
+            mask = self._create_contour_mask(detected_contour, image.shape)
+            coverage = np.sum(mask) / (h * w)
+
+            # Check if contour covers reasonable portion of image (at least 50%)
+            if coverage >= 0.5:
+                # Apply mask: keep original values inside, zero outside
+                result_image = image * mask
+
+                # Create bounding box of the contour for consistency
+                bbox = self._contour_to_bbox(detected_contour, image.shape)
+
+                return (mask * 255).astype(np.uint8), bbox
+
+        # Method 2: Fallback to largest inscribed circle
+        return self._largest_inscribed_circle(image)
+
+    def _detect_actual_contour(self, image: np.ndarray) -> Optional[np.ndarray]:
+        """
+        Try to detect actual oval/circular contours in the VSD image
+        Uses edge detection on enhanced contrast version
+        """
+        # Enhance contrast to make chamber edges more visible
+        # Normalize to 0-255 for consistent processing
+        img_norm = ((image - image.min()) / (image.max() - image.min()) * 255).astype(np.uint8)
+
+        # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to enhance edges
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        img_enhanced = clahe.apply(img_norm)
+
+        # Apply Gaussian blur to reduce noise while preserving edges
+        img_blur = cv2.GaussianBlur(img_enhanced, (5, 5), 1.0)
+
+        # Use Canny edge detection with conservative thresholds
+        edges = cv2.Canny(img_blur, 30, 100)
+
+        # Find contours
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        if not contours:
+            return None
+
+        # Filter contours by area and shape
+        valid_contours = []
+        h, w = image.shape
+        min_area = 0.3 * h * w  # At least 30% of image
+        max_area = 0.9 * h * w  # At most 90% of image
+
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if min_area <= area <= max_area:
+                # Check if contour is roughly circular/oval
+                # Fit ellipse and check aspect ratio
+                if len(contour) >= 5:  # Need at least 5 points to fit ellipse
+                    try:
+                        ellipse = cv2.fitEllipse(contour)
+                        axes = ellipse[1]  # (major_axis, minor_axis)
+                        aspect_ratio = max(axes) / min(axes)
+
+                        # Accept if reasonably circular/oval (aspect ratio < 2.5)
+                        if aspect_ratio <= 2.5:
+                            valid_contours.append((contour, area))
+                    except:
+                        continue
+
+        if not valid_contours:
+            return None
+
+        # Return largest valid contour
+        largest_contour = max(valid_contours, key=lambda x: x[1])[0]
+        return largest_contour
+
+    def _create_contour_mask(self, contour: np.ndarray, shape: Tuple[int, int]) -> np.ndarray:
+        """Create binary mask from contour"""
+        mask = np.zeros(shape, dtype=np.uint8)
+        cv2.fillPoly(mask, [contour], 1)
+        return mask
+
+    def _contour_to_bbox(self, contour: np.ndarray, shape: Tuple[int, int]) -> Tuple[int, int, int, int]:
+        """Convert contour to bounding box"""
+        x, y, w, h = cv2.boundingRect(contour)
+        # Add small padding
+        padding = 5
+        x = max(0, x - padding)
+        y = max(0, y - padding)
+        w = min(shape[1] - x, w + 2 * padding)
+        h = min(shape[0] - y, h + 2 * padding)
+        return (x, y, w, h)
+
+    def _largest_inscribed_circle(self, image: np.ndarray) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
+        """
+        Fallback method: create largest circle that fits in 100x100 image
+        Centers the circle and ensures most of image is preserved
+        """
+        h, w = image.shape
+
+        # Find center of image
+        center_x, center_y = w // 2, h // 2
+
+        # Calculate largest radius that fits in the image with some margin
+        # Use 85% of the distance to nearest edge to ensure we don't clip
+        margin_factor = 0.85
+        radius = int(min(center_x, center_y, w - center_x, h - center_y) * margin_factor)
+
+        # Ensure minimum reasonable radius
+        min_radius = min(h, w) // 4
+        radius = max(radius, min_radius)
+
+        # Create circular mask
+        y_coords, x_coords = np.ogrid[:h, :w]
+        mask = ((x_coords - center_x) ** 2 + (y_coords - center_y) ** 2) <= radius ** 2
+
+        # Apply mask: preserve original values inside circle, zero outside
+        result_image = image * mask
+
+        # Create bounding box around circle
+        x = max(0, center_x - radius)
+        y = max(0, center_y - radius)
+        bbox_w = min(2 * radius, w - x)
+        bbox_h = min(2 * radius, h - y)
+        bbox = (x, y, bbox_w, bbox_h)
+
+        return (mask * 255).astype(np.uint8), bbox
+
 
 class NoiseRegionRemover(PreprocessingStep):
     def process(self, data: np.ndarray) -> np.ndarray:
