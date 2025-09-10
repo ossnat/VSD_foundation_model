@@ -402,16 +402,3 @@ class ChamberCropper(PreprocessingStep):
         bbox = (x, y, bbox_w, bbox_h)
 
         return (mask * 255).astype(np.uint8), bbox
-
-
-class NoiseRegionRemover(PreprocessingStep):
-    def process(self, data: np.ndarray) -> np.ndarray:
-        # Apply noise masking based on config thresholds
-        return self._remove_noise_regions(data)
-
-
-class TemporalAugmenter(PreprocessingStep):
-    def process(self, data: np.ndarray) -> np.ndarray:
-        if self.config.get('enabled', True):
-            return self._apply_temporal_jittering(data)
-        return data
