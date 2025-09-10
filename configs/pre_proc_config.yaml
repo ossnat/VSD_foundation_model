@@ -11,11 +11,11 @@ offline_steps:
   - name: "ChamberCropper"
     enabled: true
     params:
-      detection_method: "hybrid"  # or "adaptive_threshold", "edge_detection"
-      blur_sigma: 2.0
-      min_region_size: 500
-      morphology_kernel_size: 3
-      padding_pixels: 5
-      min_radius: 20  # for edge detection
-      max_radius: 200  # for edge detection
-      save_masks: true  # for debugging
+      detection_method: "simple_oval_detection"  # or "adaptive_threshold", "edge_detection"
+      save_masks: true
+      margin_factor: 0.85          # How much of radius to use (0.85 = 85% of max possible)
+      min_coverage: 0.5            # Minimum coverage required for detected contours (50%)
+      max_aspect_ratio: 2.5        # Maximum ellipse aspect ratio to accept
+      clahe_clip_limit: 3.0        # CLAHE contrast enhancement limit
+      canny_low_threshold: 30      # Canny edge detection lower threshold
+      canny_high_threshold: 100    # Canny edge detection upper threshold
