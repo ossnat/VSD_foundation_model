@@ -1,404 +1,287 @@
-# preprocessing/steps.py
-from src.preprocessing.preprocess_pipeline import PreprocessingStep
-
-import cv2
+import h5py
 import numpy as np
-from scipy import ndimage
-from skimage import morphology, measure, filters
-from typing import Tuple, Optional, Dict, Any
+import matplotlib.pyplot as plt
+from pathlib import Path
 import logging
+from tqdm import tqdm
 
 
-class ChamberCropper(PreprocessingStep):
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        self.logger = logging.getLogger(__name__)
+def create_circular_mask(height=100, width=100, margin_factor=0.995):
+    """
+    Create a circular binary mask for 100x100 frame
 
-    def process(self, data: np.ndarray) -> np.ndarray:
-        """
-        Process VSD data to crop to chamber region
-        Args:
-            data: Shape [trials, frames, height, width] or [frames, height, width]
-        Returns:
-            Cropped data maintaining original structure
-        """
-        # Handle different input shapes
-        original_shape = data.shape
-        if len(data.shape) == 4:  # [trials, frames, H, W]
-            # Average across trials and frames for stable ROI detection
-            detection_image = np.mean(data, axis=(0, 1))
-        elif len(data.shape) == 3:  # [frames, H, W]
-            # Average across frames
-            detection_image = np.mean(data, axis=0)
-        else:
-            raise ValueError(f"Unexpected data shape: {data.shape}")
+    Args:
+        height: Frame height (default 100)
+        width: Frame width (default 100)
+        margin_factor: How much of max radius to use (0.85 = 85%)
 
-        # Detect chamber ROI using the averaged image
-        roi_mask, bbox = self._detect_chamber_roi(detection_image)
+    Returns:
+        mask_flat: Flattened circular mask (10000,) with 1s inside circle, 0s outside
+    """
+    # Find center of frame
+    center_x, center_y = width // 2, height // 2
 
-        # Apply cropping to original data
-        cropped_data = self._apply_crop(data, bbox)
+    # Calculate largest radius that fits with margin
+    radius = int(min(center_x, center_y, width - center_x, height - center_y) * margin_factor)
 
-        # Save mask for inspection if configured
-        if self.config.get('save_masks', False):
-            self._save_roi_mask(roi_mask, bbox)
+    # Create coordinate grids
+    y_coords, x_coords = np.ogrid[:height, :width]
 
-        return cropped_data
+    # Create circular mask: 1 inside circle, 0 outside
+    mask_2d = ((x_coords - center_x) ** 2 + (y_coords - center_y) ** 2) <= radius ** 2
 
-    def _detect_chamber_roi(self, image: np.ndarray) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
-        """
-        Detect chamber region in VSD image using multiple robust methods
-        Args:
-            image: 2D averaged intensity image [H, W]
-        Returns:
-            roi_mask: Binary mask of chamber region
-            bbox: Bounding box (x, y, width, height)
-        """
-        method = self.config.get('detection_method', 'adaptive_threshold')
+    # Flatten mask to match your data format
+    mask_flat = mask_2d.flatten().astype(np.float32)
 
-        if method == 'adaptive_threshold':
-            return self._adaptive_threshold_detection(image)
-        elif method == 'edge_detection':
-            return self._edge_based_detection(image)
-        elif method == 'hybrid':
-            return self._hybrid_detection(image)
-        else:
-            raise ValueError(f"Unknown detection method: {method}")
+    return mask_flat
 
-    def _adaptive_threshold_detection(self, image: np.ndarray) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
-        """
-        Adaptive thresholding approach robust to intensity variations
-        """
-        # Normalize image to 0-255 range for consistent processing
-        img_norm = ((image - image.min()) / (image.max() - image.min()) * 255).astype(np.uint8)
+def apply_circular_mask_to_trial(trial_data, mask_flat):
+    """
+    Apply circular mask to a single trial
 
-        # Apply Gaussian blur to reduce noise
-        blur_sigma = self.config.get('blur_sigma', 2.0)
-        img_blur = cv2.GaussianBlur(img_norm, (0, 0), blur_sigma)
+    Args:
+        trial_data: Shape (10000, 256, 8) - one trial data
+        mask_flat: Shape (10000,) - flattened circular mask
 
-        # Adaptive thresholding - automatically finds optimal threshold
-        # Using Otsu's method which is robust across different intensity distributions
-        _, binary_mask = cv2.threshold(img_blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    Returns:
+        masked_trial: Shape (10000, 256, 8) - masked trial data
+    """
+    # Apply mask to each frame (multiply each of 256*8=2048 frames by the mask)
+    masked_trial = trial_data * mask_flat[:, np.newaxis, np.newaxis]
 
-        # Alternative: Use local adaptive thresholding if global doesn't work well
-        if binary_mask.sum() < 0.05 * binary_mask.size or binary_mask.sum() > 0.8 * binary_mask.size:
-            self.logger.warning("Global thresholding failed, trying adaptive thresholding")
-            binary_mask = cv2.adaptiveThreshold(
-                img_blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                cv2.THRESH_BINARY, 51, 2
-            )
+    return masked_trial
 
-        # Clean up the mask using morphological operations
-        roi_mask = self._clean_binary_mask(binary_mask)
+def mask_all_trials(datasets, mask_flat=None):
+    """
+    Apply circular mask to multiple datasets from HDF5 groups
 
-        # Extract bounding box
-        bbox = self._get_largest_component_bbox(roi_mask)
+    Args:
+        datasets: List of numpy arrays or dict of datasets
+                 Each dataset shape: (10000, num_frames, num_trials)
+                 e.g., [(10000, 256, 8), (10000, 200, 12), ...]
+        mask_flat: Precomputed mask, if None will create new one
 
-        return roi_mask, bbox
+    Returns:
+        masked_datasets: Same structure as input, with circular mask applied to all
+    """
+    if mask_flat is None:
+        mask_flat = create_circular_mask()
 
-    def _edge_based_detection(self, image: np.ndarray) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
-        """
-        Edge-based circular detection using Hough transforms
-        """
-        # Normalize and convert to uint8
-        img_norm = ((image - image.min()) / (image.max() - image.min()) * 255).astype(np.uint8)
+    # Handle different input types
+    if isinstance(datasets, dict):
+        # If input is dictionary (e.g., from HDF5 groups)
+        masked_datasets = {}
+        for group_name, dataset in datasets.items():
+            print(f"Masking dataset '{group_name}' with shape {dataset.shape}")
+            masked_datasets[group_name] = apply_circular_mask_to_dataset(dataset, mask_flat)
 
-        # Apply median filter to reduce noise while preserving edges
-        img_filtered = cv2.medianBlur(img_norm, 5)
+    elif isinstance(datasets, list):
+        # If input is list of datasets
+        masked_datasets = []
+        for i, dataset in enumerate(datasets):
+            print(f"Masking dataset {i} with shape {dataset.shape}")
+            masked_dataset = apply_circular_mask_to_dataset(dataset, mask_flat)
+            masked_datasets.append(masked_dataset)
 
-        # Detect circles using Hough Circle Transform
-        min_radius = self.config.get('min_radius', 20)
-        max_radius = self.config.get('max_radius', min(image.shape) // 2)
+    else:
+        # Single dataset
+        print(f"Masking single dataset with shape {datasets.shape}")
+        masked_datasets = apply_circular_mask_to_dataset(datasets, mask_flat)
 
-        circles = cv2.HoughCircles(
-            img_filtered,
-            cv2.HOUGH_GRADIENT,
-            dp=1,
-            minDist=max_radius // 2,
-            param1=100,
-            param2=30,
-            minRadius=min_radius,
-            maxRadius=max_radius
-        )
+    return masked_datasets
 
-        if circles is not None:
-            # Use the largest detected circle
-            circles = np.round(circles[0, :]).astype("int")
-            largest_circle = max(circles, key=lambda c: c[2])  # Select by radius
+def apply_circular_mask_to_dataset(dataset, mask_flat):
+    """
+    Apply circular mask to a single dataset
 
-            # Create circular mask
-            roi_mask = np.zeros(image.shape, dtype=np.uint8)
-            cv2.circle(roi_mask, (largest_circle[0], largest_circle[1]), largest_circle[2], 255, -1)
+    Args:
+        dataset: Shape (10000, num_frames, num_trials)
+        mask_flat: Shape (10000,) - flattened circular mask
 
-            # Create bounding box around circle
-            x, y, r = largest_circle
-            bbox = (
-            max(0, x - r), max(0, y - r), min(2 * r, image.shape[1] - (x - r)), min(2 * r, image.shape[0] - (y - r)))
-        else:
-            # Fallback to adaptive thresholding if no circles detected
-            self.logger.warning("No circles detected, falling back to adaptive thresholding")
-            return self._adaptive_threshold_detection(image)
+    Returns:
+        masked_dataset: Same shape as input, with circular mask applied
+    """
+    if len(dataset.shape) != 3:
+        raise ValueError(f"Expected 3D dataset (10000, num_frames, num_trials), got shape {dataset.shape}")
 
-        return roi_mask, bbox
+    if dataset.shape[0] != 10000:
+        raise ValueError(f"Expected first dimension to be 10000 (pixels), got {dataset.shape[0]}")
 
-    def _hybrid_detection(self, image: np.ndarray) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
-        """
-        Combine adaptive thresholding with geometric constraints
-        """
-        # First try adaptive thresholding
-        threshold_mask, threshold_bbox = self._adaptive_threshold_detection(image)
+    if np.isnan(dataset).any():
+      print("Warning: NaNs found in dataset, will be replaced by zeros")
+      dataset = np.nan_to_num(dataset, nan=0.0)
 
-        # Then try edge detection
-        try:
-            edge_mask, edge_bbox = self._edge_based_detection(image)
+    # Apply mask using broadcasting: (10000, num_frames, num_trials) * (10000, 1, 1)
+    mask_broadcast = mask_flat[:, np.newaxis, np.newaxis]
+    masked_dataset = dataset * mask_broadcast
 
-            # Combine masks using intersection (more conservative)
-            combined_mask = cv2.bitwise_and(threshold_mask, edge_mask)
+    return masked_dataset
 
-            # If intersection is too small, use the larger mask
-            if combined_mask.sum() < 0.1 * max(threshold_mask.sum(), edge_mask.sum()):
-                if threshold_mask.sum() > edge_mask.sum():
-                    return threshold_mask, threshold_bbox
+def mask_all_trials(data, mask_flat=None):
+    """
+    Apply circular mask to all trials
+
+    Args:
+        data: Shape (num_trials, 10000, 256, 8) or (10000, 256, 8) for single trial
+        mask_flat: Precomputed mask, if None will create new one
+
+    Returns:
+        masked_data: Same shape as input, with circular mask applied
+    """
+    if mask_flat is None:
+        mask_flat = create_circular_mask()
+
+    if len(data.shape) == 4:  # Multiple trials
+        masked_data = np.zeros_like(data)
+        for i in range(data.shape[0]):
+            masked_data[i] = apply_circular_mask_to_trial(data[i], mask_flat)
+    elif len(data.shape) == 3:  # Single trial
+        masked_data = apply_circular_mask_to_trial(data, mask_flat)
+    else:
+        raise ValueError(f"Unexpected data shape: {data.shape}")
+
+    return masked_data
+
+def process_hdf5_with_circular_mask(input_hdf5_path, output_hdf5_path, mask_flat=None, overwrite=False):
+    """
+    Process entire HDF5 file: apply circular mask to all suitable datasets and save to new file
+
+    Args:
+        input_hdf5_path: Path to input HDF5 file
+        output_hdf5_path: Path to output HDF5 file
+        mask_flat: Precomputed mask, if None will create new one
+        overwrite: Whether to overwrite existing output file
+
+    Returns:
+        processing_stats: Dict with statistics about processed datasets
+    """
+    # Setup
+    input_path = Path(input_hdf5_path)
+    output_path = Path(output_hdf5_path)
+
+    if not input_path.exists():
+        raise FileNotFoundError(f"Input file not found: {input_path}")
+
+    if output_path.exists() and not overwrite:
+        raise FileExistsError(f"Output file exists: {output_path}. Use overwrite=True to replace.")
+
+    if mask_flat is None:
+        mask_flat = create_circular_mask()
+
+    # Setup logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+
+    processing_stats = {
+        'processed_datasets': [],
+        'skipped_datasets': [],
+        'total_datasets_found': 0,
+        'datasets_processed': 0,
+        'mask_coverage': np.sum(mask_flat) / len(mask_flat)
+    }
+
+    logger.info(f"Processing HDF5 file: {input_path}")
+    logger.info(f"Output file: {output_path}")
+    logger.info(f"Mask coverage: {processing_stats['mask_coverage']*100:.1f}%")
+
+    with h5py.File(input_path, 'r') as input_file, h5py.File(output_path, 'w') as output_file:
+
+        # Copy global attributes
+        for attr_name, attr_value in input_file.attrs.items():
+            output_file.attrs[attr_name] = attr_value
+
+        # Add processing metadata
+        output_file.attrs['circular_mask_applied'] = True
+        output_file.attrs['mask_coverage_percent'] = processing_stats['mask_coverage'] * 100
+        output_file.attrs['processing_source'] = str(input_path)
+
+        def process_item(name, obj):
+            """Recursively process HDF5 groups and datasets"""
+
+            if isinstance(obj, h5py.Group):
+                # Create corresponding group in output file
+                output_group = output_file.create_group(name)
+
+                # Copy group attributes
+                for attr_name, attr_value in obj.attrs.items():
+                    output_group.attrs[attr_name] = attr_value
+
+                logger.info(f"Created group: {name}")
+
+            elif isinstance(obj, h5py.Dataset):
+                processing_stats['total_datasets_found'] += 1
+                dataset_info = {
+                    'name': name,
+                    'original_shape': obj.shape,
+                    'dtype': obj.dtype,
+                    'size_mb': obj.nbytes / (1024**2)
+                }
+
+                # Check if dataset is suitable for masking (3D with 10000 pixels)
+                if len(obj.shape) == 3 and obj.shape[0] == 10000:
+                    logger.info(f"Processing dataset: {name} with shape {obj.shape}")
+
+                    # Load data
+                    data = obj[:]
+
+                    # Apply circular mask
+                    masked_data = apply_circular_mask_to_dataset(data, mask_flat)
+
+                    # Create dataset in output file with same properties
+                    output_dataset = output_file.create_dataset(
+                        name,
+                        data=masked_data,
+                        dtype=obj.dtype,
+                        compression='gzip',
+                        compression_opts=6,
+                        shuffle=True  # Can improve compression
+                    )
+
+                    # Copy dataset attributes
+                    for attr_name, attr_value in obj.attrs.items():
+                        output_dataset.attrs[attr_name] = attr_value
+
+                    # Add masking metadata
+                    output_dataset.attrs['circular_mask_applied'] = True
+                    output_dataset.attrs['original_nonzero_values'] = int(np.count_nonzero(data))
+                    output_dataset.attrs['masked_nonzero_values'] = int(np.count_nonzero(masked_data))
+
+                    dataset_info['status'] = 'processed'
+                    dataset_info['nonzero_original'] = int(np.count_nonzero(data))
+                    dataset_info['nonzero_masked'] = int(np.count_nonzero(masked_data))
+                    processing_stats['processed_datasets'].append(dataset_info)
+                    processing_stats['datasets_processed'] += 1
+
+                    logger.info(f"  ✓ Processed: {name}")
+
                 else:
-                    return edge_mask, edge_bbox
-            else:
-                bbox = self._get_largest_component_bbox(combined_mask)
-                return combined_mask, bbox
+                    # Dataset not suitable for masking, copy as-is
+                    logger.info(f"Copying dataset unchanged: {name} (shape: {obj.shape})")
 
-        except Exception as e:
-            self.logger.warning(f"Edge detection failed: {e}, using threshold mask")
-            return threshold_mask, threshold_bbox
+                    # Copy dataset as-is
+                    output_file.create_dataset(
+                        name,
+                        data=obj[:],
+                        dtype=obj.dtype,
+                        compression='gzip' if obj.size > 1000 else None
+                    )
 
-    def _clean_binary_mask(self, binary_mask: np.ndarray) -> np.ndarray:
-        """
-        Clean binary mask using morphological operations
-        """
-        # Convert to boolean for skimage operations
-        mask_bool = binary_mask > 0
+                    # Copy attributes
+                    for attr_name, attr_value in obj.attrs.items():
+                        output_file[name].attrs[attr_name] = attr_value
 
-        # Remove small objects (noise)
-        min_size = self.config.get('min_region_size', 500)
-        mask_cleaned = morphology.remove_small_objects(mask_bool, min_size=min_size)
+                    dataset_info['status'] = 'copied_unchanged'
+                    processing_stats['skipped_datasets'].append(dataset_info)
 
-        # Fill holes in the mask
-        mask_filled = ndimage.binary_fill_holes(mask_cleaned)
+        # Process all items in the file
+        print("Scanning and processing HDF5 structure...")
+        input_file.visititems(process_item)
 
-        # Apply morphological opening to separate connected regions
-        kernel_size = self.config.get('morphology_kernel_size', 3)
-        kernel = morphology.disk(kernel_size)
-        mask_opened = morphology.opening(mask_filled, kernel)
+    # Final statistics
+    logger.info(f"Processing complete!")
+    logger.info(f"  - Total datasets found: {processing_stats['total_datasets_found']}")
+    logger.info(f"  - Datasets processed with mask: {processing_stats['datasets_processed']}")
+    logger.info(f"  - Datasets copied unchanged: {len(processing_stats['skipped_datasets'])}")
+    logger.info(f"  - Output file size: {output_path.stat().st_size / (1024**2):.1f} MB")
 
-        # Convert back to uint8
-        return (mask_opened * 255).astype(np.uint8)
-
-    def _get_largest_component_bbox(self, mask: np.ndarray) -> Tuple[int, int, int, int]:
-        """
-        Get bounding box of largest connected component
-        """
-        # Find connected components
-        labeled_mask = measure.label(mask > 0)
-        regions = measure.regionprops(labeled_mask)
-
-        if not regions:
-            # If no regions found, return full image bbox
-            h, w = mask.shape
-            return (0, 0, w, h)
-
-        # Get largest region by area
-        largest_region = max(regions, key=lambda r: r.area)
-
-        # Extract bounding box with padding
-        min_row, min_col, max_row, max_col = largest_region.bbox
-        padding = self.config.get('padding_pixels', 5)
-
-        # Apply padding while staying within image bounds
-        h, w = mask.shape
-        x = max(0, min_col - padding)
-        y = max(0, min_row - padding)
-        width = min(w - x, max_col - min_col + 2 * padding)
-        height = min(h - y, max_row - min_row + 2 * padding)
-
-        return (x, y, width, height)
-
-    def _apply_crop(self, data: np.ndarray, bbox: Tuple[int, int, int, int]) -> np.ndarray:
-        """
-        Apply bounding box crop to data while preserving structure
-        """
-        x, y, width, height = bbox
-
-        if len(data.shape) == 4:  # [trials, frames, H, W]
-            return data[:, :, y:y + height, x:x + width]
-        elif len(data.shape) == 3:  # [frames, H, W]
-            return data[:, y:y + height, x:x + width]
-        else:
-            raise ValueError(f"Unexpected data shape: {data.shape}")
-
-    def _save_roi_mask(self, mask: np.ndarray, bbox: Tuple[int, int, int, int]):
-        """
-        Save ROI mask and bbox for inspection
-        """
-        import matplotlib.pyplot as plt
-
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
-
-        # Plot original mask
-        ax1.imshow(mask, cmap='gray')
-        ax1.set_title('Detected Chamber ROI')
-        ax1.axis('off')
-
-        # Plot bounding box overlay
-        x, y, w, h = bbox
-        rect = plt.Rectangle((x, y), w, h, linewidth=2, edgecolor='red', facecolor='none')
-        ax2.imshow(mask, cmap='gray')
-        ax2.add_patch(rect)
-        ax2.set_title('Bounding Box')
-        ax2.axis('off')
-
-        plt.tight_layout()
-        plt.savefig('roi_detection_debug.png', dpi=150, bbox_inches='tight')
-        plt.close()
-
-    def get_params(self) -> Dict[str, Any]:
-        """Return step parameters for logging/reproducibility"""
-        return {
-            'detection_method': self.config.get('detection_method', 'adaptive_threshold'),
-            'blur_sigma': self.config.get('blur_sigma', 2.0),
-            'min_region_size': self.config.get('min_region_size', 500),
-            'padding_pixels': self.config.get('padding_pixels', 5),
-            'morphology_kernel_size': self.config.get('morphology_kernel_size', 3)
-        }
-
-    def _simple_oval_detection(self, image: np.ndarray) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
-        """
-        Simple method to detect oval/circular chamber and zero out edges
-        Preserves original pixel values inside detected contour, zeros outside
-        """
-        h, w = image.shape
-
-        # Method 1: Try to detect actual oval/circular contours
-        detected_contour = self._detect_actual_contour(image)
-
-        if detected_contour is not None:
-            # Use detected contour
-            mask = self._create_contour_mask(detected_contour, image.shape)
-            coverage = np.sum(mask) / (h * w)
-
-            # Check if contour covers reasonable portion of image (at least 50%)
-            if coverage >= 0.5:
-                # Apply mask: keep original values inside, zero outside
-                result_image = image * mask
-
-                # Create bounding box of the contour for consistency
-                bbox = self._contour_to_bbox(detected_contour, image.shape)
-
-                return (mask * 255).astype(np.uint8), bbox
-
-        # Method 2: Fallback to largest inscribed circle
-        return self._largest_inscribed_circle(image)
-
-    def _detect_actual_contour(self, image: np.ndarray) -> Optional[np.ndarray]:
-        """
-        Try to detect actual oval/circular contours in the VSD image
-        Uses edge detection on enhanced contrast version
-        """
-        # Enhance contrast to make chamber edges more visible
-        # Normalize to 0-255 for consistent processing
-        img_norm = ((image - image.min()) / (image.max() - image.min()) * 255).astype(np.uint8)
-
-        # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to enhance edges
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        img_enhanced = clahe.apply(img_norm)
-
-        # Apply Gaussian blur to reduce noise while preserving edges
-        img_blur = cv2.GaussianBlur(img_enhanced, (5, 5), 1.0)
-
-        # Use Canny edge detection with conservative thresholds
-        edges = cv2.Canny(img_blur, 30, 100)
-
-        # Find contours
-        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        if not contours:
-            return None
-
-        # Filter contours by area and shape
-        valid_contours = []
-        h, w = image.shape
-        min_area = 0.3 * h * w  # At least 30% of image
-        max_area = 0.9 * h * w  # At most 90% of image
-
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if min_area <= area <= max_area:
-                # Check if contour is roughly circular/oval
-                # Fit ellipse and check aspect ratio
-                if len(contour) >= 5:  # Need at least 5 points to fit ellipse
-                    try:
-                        ellipse = cv2.fitEllipse(contour)
-                        axes = ellipse[1]  # (major_axis, minor_axis)
-                        aspect_ratio = max(axes) / min(axes)
-
-                        # Accept if reasonably circular/oval (aspect ratio < 2.5)
-                        if aspect_ratio <= 2.5:
-                            valid_contours.append((contour, area))
-                    except:
-                        continue
-
-        if not valid_contours:
-            return None
-
-        # Return largest valid contour
-        largest_contour = max(valid_contours, key=lambda x: x[1])[0]
-        return largest_contour
-
-    def _create_contour_mask(self, contour: np.ndarray, shape: Tuple[int, int]) -> np.ndarray:
-        """Create binary mask from contour"""
-        mask = np.zeros(shape, dtype=np.uint8)
-        cv2.fillPoly(mask, [contour], 1)
-        return mask
-
-    def _contour_to_bbox(self, contour: np.ndarray, shape: Tuple[int, int]) -> Tuple[int, int, int, int]:
-        """Convert contour to bounding box"""
-        x, y, w, h = cv2.boundingRect(contour)
-        # Add small padding
-        padding = 5
-        x = max(0, x - padding)
-        y = max(0, y - padding)
-        w = min(shape[1] - x, w + 2 * padding)
-        h = min(shape[0] - y, h + 2 * padding)
-        return (x, y, w, h)
-
-    def _largest_inscribed_circle(self, image: np.ndarray) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
-        """
-        Fallback method: create largest circle that fits in 100x100 image
-        Centers the circle and ensures most of image is preserved
-        """
-        h, w = image.shape
-
-        # Find center of image
-        center_x, center_y = w // 2, h // 2
-
-        # Calculate largest radius that fits in the image with some margin
-        # Use 85% of the distance to nearest edge to ensure we don't clip
-        margin_factor = 0.85
-        radius = int(min(center_x, center_y, w - center_x, h - center_y) * margin_factor)
-
-        # Ensure minimum reasonable radius
-        min_radius = min(h, w) // 4
-        radius = max(radius, min_radius)
-
-        # Create circular mask
-        y_coords, x_coords = np.ogrid[:h, :w]
-        mask = ((x_coords - center_x) ** 2 + (y_coords - center_y) ** 2) <= radius ** 2
-
-        # Apply mask: preserve original values inside circle, zero outside
-        result_image = image * mask
-
-        # Create bounding box around circle
-        x = max(0, center_x - radius)
-        y = max(0, center_y - radius)
-        bbox_w = min(2 * radius, w - x)
-        bbox_h = min(2 * radius, h - y)
-        bbox = (x, y, bbox_w, bbox_h)
-
-        return (mask * 255).astype(np.uint8), bbox
+    return processing_stats
