@@ -1,10 +1,5 @@
-# ==================================
-# File: src/models/cnn3d.py
-# ==================================
-
 import torch
 import torch.nn as nn
-
 
 class ConvBlock(nn.Module):
     def __init__(self, c_in, c_out, k=(3,3,3), s=(1,2,2), p=(1,1,1)):

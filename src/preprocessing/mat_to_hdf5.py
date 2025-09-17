@@ -3,6 +3,9 @@ import numpy as np
 import scipy.io
 import h5py
 from tqdm import tqdm
+import random
+import matplotlib.pyplot as plt
+
 
 def convert_mat_to_hdf5(input_main_dir, output_hdf5_path, filename_pattern, exclude_keys=None):
     """
@@ -83,10 +86,6 @@ def convert_mat_to_hdf5(input_main_dir, output_hdf5_path, filename_pattern, excl
     print(f"\nConversion finished. Data written to HDF5 file at '{output_hdf5_path}'.")
 
 
-import h5py
-import random
-import matplotlib.pyplot as plt
-import numpy as np
 def test_view_sample_hdf5_converted_file(hdf5_file_path = 'HDF5_DATA/vsd_video_data.hdf5'):
 
     global item
