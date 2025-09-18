@@ -1,1 +1,2 @@
-from .datasets import build_dataset # noqa: F401
+from .datasets import VsdVideoDataset # noqa: F401
+from .data_loader import load_dataset
