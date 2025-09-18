@@ -1,59 +1,83 @@
 # ================================
 # File: src/data/datasets.py
 # ================================
-
-import math
 import torch
-from torch.utils.data import Dataset
-import numpy as np
-from typing import Tuple, Literal
+from torch.utils.data import DataLoader, Dataset
+from torchvision import datasets, transforms
+import h5py # Import h5py to be used in VsdVideoDataset
+import numpy as np # Import numpy to be used in VsdVideoDataset
 
 
-class DummyVideoDataset(Dataset):
-    """Generates synthetic grayscale video clips for smoke testing.
-    Produces simple moving Gaussian blobs + noise.
-    Returns dict with keys: video (B,C,T,H,W), mask (T,H,W) for MAE.
-    """
-    def __init__(self, num_videos: int, frames: int, size: Tuple[int, int], split: Literal["train","val"],
-                 channels: int = 1, seed: int = 123):
-        self.num_videos = num_videos if split == "train" else max(16, num_videos // 10)
-        self.frames = frames
-        self.h, self.w = size
-        self.channels = channels
-        self.rng = np.random.RandomState(seed + (0 if split == "train" else 1))
+# Define the VsdVideoDataset class within this file or ensure it's imported
+# Assuming the VsdVideoDataset class is defined in the previous steps and accessible
+class VsdVideoDataset(Dataset):
+    """PyTorch Dataset for loading VSD video data from HDF5 file."""
 
-    def __len__(self):
-        return self.num_videos
+    def __init__(self, hdf5_path: str):
+        """
+        Args:
+            hdf5_path (str): Path to the HDF5 file.
+        """
+        self.hdf5_path = hdf5_path
+        self.data_structure = [] # Store tuples of (group_name, dataset_name, trial_index)
 
-    def __getitem__(self, idx):
-        T, H, W = self.frames, self.h, self.w
-        vid = np.zeros((T, H, W), dtype=np.float32)
-        # random walk center
-        x, y = self.rng.randint(W//4, 3*W//4), self.rng.randint(H//4, 3*H//4)
-        vx, vy = self.rng.randn()*0.8, self.rng.randn()*0.8
-        sigma = self.rng.uniform(2.0, 4.0)
-        for t in range(T):
-            x = (x + vx)
-            y = (y + vy)
-            x = max(0, min(W-1, x))
-            y = max(0, min(H-1, y))
-            xx, yy = np.meshgrid(np.arange(W), np.arange(H))
-            blob = np.exp(-(((xx - x)**2 + (yy - y)**2) / (2*sigma**2)))
-            vid[t] = blob
-        # normalize and add noise
-        vid = (vid - vid.mean()) / (vid.std() + 1e-6)
-        vid += self.rng.randn(T, H, W).astype(np.float32) * 0.1
-        vid = vid[None, ...]  # C=1
-        sample = {"video": torch.from_numpy(vid), "mask": None}
-        return sample
+        with h5py.File(self.hdf5_path, 'r') as f:
+            for group_name in f.keys():
+                group = f[group_name]
+                for dataset_name in group.keys():
+                    dataset = group[dataset_name]
+                    num_trials = dataset.shape[-1]
+                    # Assuming data is (pixels, frames, trials)
+                    # Add each trial as a separate sample
+                    for trial_index in range(num_trials):
+                         self.data_structure.append((group_name, dataset_name, trial_index))
+
+        self.total_samples = len(self.data_structure)
 
 
-def build_dataset(cfg, split="train"):
-    if cfg["dataset"] == "dummy":
-        return DummyVideoDataset(num_videos=cfg["num_videos"],
-                                 frames=cfg["frames"],
-                                 size=(cfg["height"], cfg["width"]),
-                                 split=split,
-                                 channels=cfg["channels"])
-    else:
-        raise ValueError(f"Unknown dataset: {cfg['dataset']}")
+    def __len__(self) -> int:
+        """
+        Returns the total number of samples in the dataset.
+        """
+        return self.total_samples
+
+    def __getitem__(self, idx: int):
+        """
+        Loads and returns a sample from the dataset.
+
+        Args:
+            idx (int): Index of the sample.
+
+        Returns:
+            torch.Tensor: The video data tensor.
+        """
+        if idx >= self.total_samples:
+            raise IndexError("Dataset index out of range")
+
+        group_name, dataset_name, trial_index = self.data_structure[idx]
+
+        with h5py.File(self.hdf5_path, 'r') as f:
+            dataset = f[group_name][dataset_name]
+            # Data is likely (pixels, frames, trials), slice the correct trial
+            # Assuming pixels are 10000, frames are 256
+            # Reshape to (100, 100, 256)
+            # Slice along the last dimension (trial index)
+            data_slice = dataset[:, :, trial_index]
+
+        # Reshape the data slice to (channels, frames, height, width)
+        # Assuming channels = 1, height = 100, width = 100
+        # Original slice shape is (10000, 256)
+        # Reshape to (100, 100, 256) first, then rearrange dimensions
+        height, width = 100, 100
+        frames = data_slice.shape[1]
+        reshaped_data = data_slice.reshape(height, width, frames)
+
+        # Rearrange to (channels, frames, height, width) - (1, 256, 100, 100)
+        # Add a channel dimension
+        tensor_data = torch.from_numpy(reshaped_data).unsqueeze(0).permute(0, 3, 1, 2)
+
+        # Create a dummy mask tensor with the same spatial and temporal dimensions as the video tensor
+        # Assuming mask is single channel (1, frames, height, width)
+        mask_tensor = torch.zeros(1, frames, height, width, dtype=torch.float32)
+
+        return {"video": tensor_data, "mask": mask_tensor} # Return a dictionary for consistency with DummyVideoDataset
