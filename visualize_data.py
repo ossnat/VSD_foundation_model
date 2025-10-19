@@ -16,7 +16,7 @@ from src.data import *  # noqa: F401,F403
 # from src.preprocessing import *  # noqa: F401,F403
 # from src.training import *  # noqa: F401,F403
 from src.utils import *  # noqa: F401,F403
-from src.utils.visualization import plot_frames_sequence
+from src.utils.visualization import plot_frames_sequence, plot_spatial_dynamics
 
 
 def load_hdf5(hdf5_path: Path):
@@ -59,6 +59,11 @@ def main():
     cfg = {
         "dataset": "vsd",
         "vsd_hdf5_path": Path(r"G:\My Drive\HDF5_DATA_AFTER_PREPROCESSING2\vsd_video_data.hdf5"),
+        "normalize": True,
+        "normalization_type": "baseline_zscore",
+        "baseline_frame": 20,
+        "frame_start": 1,
+        "frame_end": 100,
         "batch_size": 4, # You can adjust the batch size
         "num_workers": 2, # You can adjust the number of workers
         "shuffle": True # Set to True to shuffle the data
@@ -110,6 +115,16 @@ def main():
                 clipping=(-0.003, 0.003),
                 cols=10,
                 title=f"Random Sample {random_index_in_batch} - Frame Sequence",
+                show_plot=True
+            )
+
+            # Plot spatial dynamics
+            print(f"\n📊 Plotting spatial dynamics for sample {random_index_in_batch}...")
+            plot_spatial_dynamics(
+                video_tensor=video_tensor,
+                grid_rows=10,
+                grid_cols=10,
+                title=f"Random Sample {random_index_in_batch} - Spatial Dynamics",
                 show_plot=True
             )
 

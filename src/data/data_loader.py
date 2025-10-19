@@ -2,9 +2,10 @@
 import torch
 from torch.utils.data import DataLoader
 from .datasets import VsdVideoDataset
+from typing import Dict, Any
 
 def load_dataset(
-    cfg, # Pass the entire config dictionary
+    cfg: Dict[str, Any], # Pass the entire config dictionary
     split: str = "train",
     batch_size: int = 4,
     num_workers: int = 2,
@@ -23,10 +24,31 @@ def load_dataset(
         DataLoader
     """
     if cfg["dataset"] == "vsd":
-        # Use the VsdVideoDataset
-        # Assuming the HDF5 file path is specified in the config
+        # Extract configuration parameters
         hdf5_path = cfg["vsd_hdf5_path"]
-        dataset = VsdVideoDataset(hdf5_path=hdf5_path)
+        
+        # Normalization settings
+        normalize = cfg.get("normalize", False)
+        normalization_type = cfg.get("normalization_type", "baseline_zscore")
+        baseline_frame = cfg.get("baseline_frame", 20)
+        cache_dir = cfg.get("cache_dir", "cache")
+        normalization_kwargs = cfg.get("normalization_kwargs", {})
+        
+        # Frame slicing settings
+        frame_start = cfg.get("frame_start", 0)
+        frame_end = cfg.get("frame_end", None)
+        
+        # Create dataset with all parameters
+        dataset = VsdVideoDataset(
+            hdf5_path=hdf5_path,
+            normalize=normalize,
+            normalization_type=normalization_type,
+            baseline_frame=baseline_frame,
+            frame_start=frame_start,
+            frame_end=frame_end,
+            cache_dir=cache_dir,
+            normalization_kwargs=normalization_kwargs
+        )
     else:
         raise ValueError(f"Unknown dataset: {cfg['dataset']}")
 

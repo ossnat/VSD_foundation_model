@@ -155,3 +155,166 @@ def plot_frames_sequence(
         plt.show()
     
     return fig
+
+
+def plot_spatial_dynamics(
+    video_tensor: torch.Tensor,
+    grid_rows: int = 10,
+    grid_cols: int = 10,
+    figsize: Tuple[float, float] = (15, 15),
+    cmap: str = "hot",
+    vmin: Optional[float] = None,
+    vmax: Optional[float] = None,
+    title: str = "Spatial Dynamics",
+    save_path: Optional[Union[str, Path]] = None,
+    show_plot: bool = True
+) -> plt.Figure:
+    """
+    Plot spatial dynamics by showing average response over time for each spatial patch.
+    
+    This function divides the spatial dimensions into patches and shows the temporal
+    dynamics (average response over time) for each patch in a grid layout.
+    
+    Args:
+        video_tensor: Tensor of shape (C, T, H, W) or (T, H, W)
+        grid_rows: Number of rows in the grid layout (default: 10)
+        grid_cols: Number of columns in the grid layout (default: 10)
+        figsize: Figure size (width, height)
+        cmap: Colormap for visualization
+        vmin, vmax: Color scale limits
+        title: Plot title
+        save_path: Optional path to save the figure
+        show_plot: Whether to display the plot
+        
+    Returns:
+        matplotlib Figure object
+    """
+    # Handle different tensor shapes
+    if video_tensor.ndim == 4:  # (C, T, H, W)
+        if video_tensor.shape[0] == 1:
+            frames = video_tensor.squeeze(0)  # (T, H, W)
+        else:
+            frames = video_tensor.mean(dim=0)  # Average across channels
+    elif video_tensor.ndim == 3:  # (T, H, W)
+        frames = video_tensor
+    else:
+        raise ValueError(f"Expected 3D or 4D tensor, got {video_tensor.ndim}D")
+    
+    T, H, W = frames.shape
+    
+    # Derive patch size from grid dimensions
+    patch_height = H // grid_rows
+    patch_width = W // grid_cols
+    
+    # Calculate actual number of patches based on derived patch size
+    patches_h = H // patch_height
+    patches_w = W // patch_width
+    total_patches = patches_h * patches_w
+    
+    # Ensure we don't exceed the requested grid size
+    if total_patches > grid_rows * grid_cols:
+        total_patches = grid_rows * grid_cols
+    
+    # Create figure
+    fig, axes = plt.subplots(grid_rows, grid_cols, figsize=figsize)
+    if grid_rows == 1:
+        axes = axes.reshape(1, -1) if grid_cols > 1 else [axes]
+    elif grid_cols == 1:
+        axes = axes.reshape(-1, 1)
+    
+    # Calculate patch dynamics
+    patch_dynamics = []
+    patch_idx = 0
+    for i in range(grid_rows):
+        for j in range(grid_cols):
+            if patch_idx >= total_patches:
+                break
+                
+            # Extract patch coordinates using derived patch dimensions
+            h_start = i * patch_height
+            h_end = h_start + patch_height
+            w_start = j * patch_width
+            w_end = w_start + patch_width
+            
+            # Extract patch and compute average over spatial dimensions
+            patch = frames[:, h_start:h_end, w_start:w_end]  # (T, patch_height, patch_width)
+            patch_mean = patch.mean(dim=(1, 2))  # (T,) - average over spatial dimensions
+            
+            patch_dynamics.append(patch_mean)
+            patch_idx += 1
+    
+    # Convert to tensor for easier manipulation
+    patch_dynamics = torch.stack(patch_dynamics)  # (total_patches, T)
+    
+    # Determine color scale if not provided - FIXED VERSION
+    if vmin is None or vmax is None:
+        # Filter out NaN and Inf values before computing min/max
+        valid_data = patch_dynamics[torch.isfinite(patch_dynamics)]
+        if len(valid_data) == 0:
+            # If all data is NaN/Inf, use default range
+            vmin_auto, vmax_auto = -1.0, 1.0
+        else:
+            vmin_auto = valid_data.min().item()
+            vmax_auto = valid_data.max().item()
+        
+        vmin = vmin if vmin is not None else vmin_auto
+        vmax = vmax if vmax is not None else vmax_auto
+    
+    # Plot each patch dynamics
+    for idx in range(total_patches):
+        row = idx // grid_cols
+        col = idx % grid_cols
+        
+        ax = axes[row, col]
+        
+        # Plot temporal dynamics
+        time_points = torch.arange(T)
+        dynamics = patch_dynamics[idx].cpu().numpy()
+        
+        # Filter out NaN/Inf values for plotting
+        finite_mask = np.isfinite(dynamics)
+        if np.any(finite_mask):
+            ax.plot(time_points[finite_mask], dynamics[finite_mask], linewidth=1.5, color='red')
+            ax.fill_between(time_points[finite_mask], dynamics[finite_mask], alpha=0.3, color='red')
+        else:
+            # If all values are NaN/Inf, plot a flat line
+            ax.axhline(y=0, color='red', linewidth=1.5)
+        
+        # Customize subplot
+        ax.set_title(f'Patch {idx+1}', fontsize=8)
+        ax.set_xlabel('Time', fontsize=6)
+        ax.set_ylabel('Response', fontsize=6)
+        ax.tick_params(axis='both', which='major', labelsize=6)
+        ax.grid(True, alpha=0.3)
+        
+        # Set y-axis limits for better visualization - FIXED VERSION
+        if torch.isfinite(torch.tensor([vmin, vmax])).all():
+            ax.set_ylim(vmin, vmax)
+        else:
+            # Use auto-scaling if limits are invalid
+            ax.set_ylim(auto=True)
+    
+    # Hide unused subplots
+    for idx in range(total_patches, grid_rows * grid_cols):
+        row = idx // grid_cols
+        col = idx % grid_cols
+        axes[row, col].axis('off')
+    
+    # Set overall title and layout
+    fig.suptitle(f'{title}\n({grid_rows}×{grid_cols} grid, {patch_height}×{patch_width} pixels per patch)', 
+                 fontsize=14, y=0.98)
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.95)
+    
+    # Save if path provided
+    if save_path:
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Spatial dynamics figure saved to: {save_path}")
+    
+    # Show plot if requested
+    if show_plot:
+        plt.show()
+    
+    return fig
