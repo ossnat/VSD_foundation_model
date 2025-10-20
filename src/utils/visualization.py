@@ -38,7 +38,8 @@ def plot_frames_sequence(
     figsize: Optional[Tuple[float, float]] = None,
     title: str = "Video Frames Sequence",
     save_path: Optional[Union[str, Path]] = None,
-    show_plot: bool = True
+    show_plot: bool = True,
+    real_frame_range: Optional[Tuple[int, int]] = None
 ) -> plt.Figure:
     """
     Plot a sequence of video frames in a grid layout.
@@ -50,19 +51,21 @@ def plot_frames_sequence(
     
     Args:
         video_tensor: Video tensor of shape (C, T, H, W) or (T, H, W)
-        start_frame: Starting frame index (default: 0)
-        end_frame: Ending frame index (if None, uses all frames from start_frame)
+        start_frame: Starting frame index within the tensor (default: 0)
+        end_frame: Ending frame index within the tensor (if None, uses all frames from start_frame)
         clipping: Tuple of (min, max) values for color scaling (default: (-0.003, 0.003))
         cols: Number of columns in the grid (default: 10)
         figsize: Figure size as (width, height) (default: auto-calculated)
         title: Title for the plot (default: "Video Frames Sequence")
         save_path: Optional path to save the figure
         show_plot: Whether to display the plot (default: True)
+        real_frame_range: Tuple of (real_start, real_end) representing absolute frame indices from original dataset
         
     Returns:
         matplotlib Figure object
     """
     # Step 4: Define the frame range to extract for plotting
+    # start_frame and end_frame are relative to the video_tensor
     if end_frame is None:
         if video_tensor.ndim == 4:  # (C, T, H, W)
             end_frame = video_tensor.shape[1] - 1
@@ -84,7 +87,7 @@ def plot_frames_sequence(
         start_frame = 0
         end_frame = max_frames - 1
     
-    # Step 5: Extract the desired frame range
+    # Step 5: Extract the desired frame range from video_tensor
     if video_tensor.ndim == 4:  # (C, T, H, W)
         frames_to_plot = video_tensor[:, start_frame:end_frame + 1, :, :]
         # Remove the channel dimension if it's 1 for easier plotting
@@ -118,7 +121,18 @@ def plot_frames_sequence(
         # Convert tensor to numpy for plotting
         frame_data = frames_to_plot[i, :, :].numpy() - 1  # Subtract 1 as in original code
         im = ax.imshow(frame_data, cmap='hot', vmin=global_min_plot, vmax=global_max_plot)
-        ax.set_title(f"Frame {start_frame + i}", fontsize=8)
+        # Use real frame indices if provided, otherwise use relative indices
+        if real_frame_range is not None:
+            real_start, real_end = real_frame_range
+            # Calculate the real frame index based on the selected range within the video tensor
+            tensor_frame_idx = start_frame + i
+            tensor_total_frames = video_tensor.shape[1] if video_tensor.ndim == 4 else video_tensor.shape[0]
+            # Map tensor frame index to real frame index
+            frame_ratio = tensor_frame_idx / (tensor_total_frames - 1)
+            real_frame_idx = int(real_start + frame_ratio * (real_end - real_start))
+            ax.set_title(f"Frame {real_frame_idx}", fontsize=8)
+        else:
+            ax.set_title(f"Frame {start_frame + i}", fontsize=8)
         ax.axis('off')
     
     # Hide any unused subplots
@@ -167,7 +181,8 @@ def plot_spatial_dynamics(
     vmax: Optional[float] = None,
     title: str = "Spatial Dynamics",
     save_path: Optional[Union[str, Path]] = None,
-    show_plot: bool = True
+    show_plot: bool = True,
+    real_frame_range: Optional[Tuple[int, int]] = None
 ) -> plt.Figure:
     """
     Plot spatial dynamics by showing average response over time for each spatial patch.
@@ -185,6 +200,7 @@ def plot_spatial_dynamics(
         title: Plot title
         save_path: Optional path to save the figure
         show_plot: Whether to display the plot
+        real_frame_range: Tuple of (real_start, real_end) representing absolute frame indices from original dataset
         
     Returns:
         matplotlib Figure object
@@ -268,7 +284,13 @@ def plot_spatial_dynamics(
         ax = axes[row, col]
         
         # Plot temporal dynamics
-        time_points = torch.arange(T)
+        # Use real frame indices if provided, otherwise use relative indices
+        if real_frame_range is not None:
+            real_start, real_end = real_frame_range
+            time_points = torch.linspace(real_start, real_end, T)
+        else:
+            time_points = torch.arange(T)
+        
         dynamics = patch_dynamics[idx].cpu().numpy()
         
         # Filter out NaN/Inf values for plotting

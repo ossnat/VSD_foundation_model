@@ -7,7 +7,7 @@ from torchvision import datasets, transforms
 import h5py # Import h5py to be used in VsdVideoDataset
 import numpy as np # Import numpy to be used in VsdVideoDataset
 from .normalization import get_normalizer
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 
 
 # Define the VsdVideoDataset class within this file or ensure it's imported
@@ -15,14 +15,15 @@ from typing import Optional, Dict, Any
 class VsdVideoDataset(Dataset):
     """PyTorch Dataset for loading VSD video data from HDF5 file."""
 
-    def __init__(self, hdf5_path: str, 
+    def __init__(self, hdf5_path: str,
                  normalize: bool = False,
                  normalization_type: str = "baseline_zscore",
                  baseline_frame: int = 20,
                  frame_start: int = 0,
                  frame_end: Optional[int] = None,
                  cache_dir: Optional[str] = None,
-                 normalization_kwargs: Optional[Dict] = None):
+                 normalization_kwargs: Optional[Dict] = None,
+                 window_size: int = 0):
         """
         Args:
             hdf5_path (str): Path to the HDF5 file.
@@ -42,9 +43,12 @@ class VsdVideoDataset(Dataset):
         self.frame_end = frame_end
         self.cache_dir = cache_dir
         self.normalization_kwargs = normalization_kwargs or {}
+        self.window_size = int(window_size) if window_size is not None else 0
         
         # Build data structure
-        self.data_structure = [] # Store tuples of (group_name, dataset_name, trial_index)
+        # If windowing is enabled (window_size > 0), store (group, dataset, trial_idx, window_idx)
+        # Otherwise store (group, dataset, trial_idx, None)
+        self.data_structure: list[Tuple[str, str, int, Optional[int]]] = []
 
         with h5py.File(self.hdf5_path, 'r') as f:
             for group_name in f.keys():
@@ -53,9 +57,22 @@ class VsdVideoDataset(Dataset):
                     dataset = group[dataset_name]
                     num_trials = dataset.shape[-1]
                     # Assuming data is (pixels, frames, trials)
-                    # Add each trial as a separate sample
+                    # Determine effective frame range after slicing
+                    total_frames = dataset.shape[1]
+                    start = max(0, self.frame_start)
+                    end = (self.frame_end if self.frame_end is not None else total_frames - 1)
+                    end = min(end, total_frames - 1)
+                    if end < start:
+                        start, end = 0, total_frames - 1
+                    effective_frames = (end - start + 1)
+
                     for trial_index in range(num_trials):
-                         self.data_structure.append((group_name, dataset_name, trial_index))
+                        if self.window_size and self.window_size > 0:
+                            num_windows = effective_frames // self.window_size
+                            for window_idx in range(num_windows):
+                                self.data_structure.append((group_name, dataset_name, trial_index, window_idx))
+                        else:
+                            self.data_structure.append((group_name, dataset_name, trial_index, None))
 
         self.total_samples = len(self.data_structure)
         
@@ -104,19 +121,33 @@ class VsdVideoDataset(Dataset):
         if idx >= self.total_samples:
             raise IndexError("Dataset index out of range")
 
-        group_name, dataset_name, trial_index = self.data_structure[idx]
+        group_name, dataset_name, trial_index, window_idx = self.data_structure[idx]
 
         with h5py.File(self.hdf5_path, 'r') as f:
             dataset = f[group_name][dataset_name]
-            # Data is likely (pixels, frames, trials), slice the correct trial
-            # Slice along the last dimension (trial index)
-            data_slice = dataset[:, :, trial_index]
-            
-            # Apply frame slicing if specified
-            if self.frame_end is not None:
-                data_slice = data_slice[:, self.frame_start:self.frame_end + 1]
+            # Data is (pixels, frames, trials); slice the correct trial
+            trial_data = dataset[:, :, trial_index]
+
+            # Apply frame slicing first
+            total_frames = trial_data.shape[1]
+            start = max(0, self.frame_start)
+            end = (self.frame_end if self.frame_end is not None else total_frames - 1)
+            end = min(end, total_frames - 1)
+            if end < start:
+                start, end = 0, total_frames - 1
+            sliced = trial_data[:, start:end + 1]
+
+            # Apply window slicing if requested
+            if self.window_size and self.window_size > 0:
+                win_start = window_idx * self.window_size
+                win_end = win_start + self.window_size
+                data_slice = sliced[:, win_start:win_end]
+                abs_start_frame = start + win_start
+                abs_end_frame = start + win_end - 1
             else:
-                data_slice = data_slice[:, self.frame_start:]
+                data_slice = sliced
+                abs_start_frame = start
+                abs_end_frame = end
 
         # Reshape the data slice to (channels, frames, height, width)
         # Assuming channels = 1, height = 100, width = 100
@@ -136,4 +167,4 @@ class VsdVideoDataset(Dataset):
         # Assuming mask is single channel (1, frames, height, width)
         mask_tensor = torch.zeros(1, frames, height, width, dtype=torch.float32)
 
-        return {"video": tensor_data, "mask": mask_tensor} # Return a dictionary for consistency with DummyVideoDataset
+        return {"video": tensor_data, "mask": mask_tensor, "start_frame": int(abs_start_frame), "end_frame": int(abs_end_frame)} # Return a dictionary for consistency with DummyVideoDataset
