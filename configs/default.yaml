@@ -1,12 +1,18 @@
 # Data
-dataset: dummy
-num_videos: 2000 # for dummy dataset only
-frames: 32
-height: 96
-width: 96
+dataset: vsd
+vsd_hdf5_path: "G:/My Drive/HDF5_DATA_AFTER_PREPROCESSING2/vsd_video_data.hdf5"
+normalize: true
+normalization_type: baseline_zscore
+baseline_frame: 20
+frame_start: 1
+frame_end: 100
+frames: 100
+height: 100
+width: 100
 channels: 1
 batch_size: 8
 num_workers: 2
+train_split: 0.8  # 80% for training, 20% for validation
 
 
 # Task
@@ -22,7 +28,7 @@ embed_dim: 256
 
 # Optim
 epochs: 5 # keep tiny for smoke test
-lr: 1e-3
+lr: 0.001
 weight_decay: 0.05
 seed: 42
 log_dir: logs
