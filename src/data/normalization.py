@@ -13,9 +13,10 @@ from pathlib import Path
 class Normalizer(ABC):
     """Abstract base class for normalization methods"""
     
-    def __init__(self, baseline_frame: int = 20, cache_dir: Optional[str] = None):
+    def __init__(self, baseline_frame: int = 20, cache_dir: Optional[str] = None, normalization_type: str = "unknown"):
         self.baseline_frame = baseline_frame
         self.cache_dir = cache_dir or "cache"
+        self.normalization_type = normalization_type
         self._stats_cache = {}  # Cache for computed statistics
     
     @abstractmethod
@@ -30,7 +31,7 @@ class Normalizer(ABC):
     
     def _get_cache_path(self, hdf5_path: str, frame_start: int, frame_end: int) -> str:
         """Generate cache file path for statistics"""
-        cache_name = f"{Path(hdf5_path).stem}_frames_{frame_start}_{frame_end}_baseline_{self.baseline_frame}.pkl"
+        cache_name = f"{Path(hdf5_path).stem}_frames_{frame_start}_{frame_end}_baseline_{self.baseline_frame}_{self.normalization_type}.pkl"
         return os.path.join(self.cache_dir, cache_name)
     
     def _load_from_cache(self, cache_path: str) -> Optional[Dict[str, torch.Tensor]]:
@@ -64,7 +65,7 @@ class BaselineZScoreNormalizer(Normalizer):
     """
     
     def __init__(self, baseline_frame: int = 20, epsilon: float = 1e-8, cache_dir: Optional[str] = None):
-        super().__init__(baseline_frame, cache_dir)
+        super().__init__(baseline_frame, cache_dir, "baseline_zscore")
         self.epsilon = epsilon
     
     def normalize(self, data: torch.Tensor, stats: Optional[Dict] = None) -> torch.Tensor:
@@ -175,7 +176,7 @@ class BaselineRobustNormalizer(Normalizer):
     """
     
     def __init__(self, baseline_frame: int = 20, epsilon: float = 1e-8, cache_dir: Optional[str] = None):
-        super().__init__(baseline_frame, cache_dir)
+        super().__init__(baseline_frame, cache_dir, "baseline_robust")
         self.epsilon = epsilon
     
     def normalize(self, data: torch.Tensor, stats: Optional[Dict] = None) -> torch.Tensor:
