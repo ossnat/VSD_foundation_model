@@ -1,59 +1,170 @@
 # ================================
 # File: src/data/datasets.py
 # ================================
-
-import math
 import torch
-from torch.utils.data import Dataset
-import numpy as np
-from typing import Tuple, Literal
+from torch.utils.data import DataLoader, Dataset
+from torchvision import datasets, transforms
+import h5py # Import h5py to be used in VsdVideoDataset
+import numpy as np # Import numpy to be used in VsdVideoDataset
+from .normalization import get_normalizer
+from typing import Optional, Dict, Any, Tuple
 
 
-class DummyVideoDataset(Dataset):
-    """Generates synthetic grayscale video clips for smoke testing.
-    Produces simple moving Gaussian blobs + noise.
-    Returns dict with keys: video (B,C,T,H,W), mask (T,H,W) for MAE.
-    """
-    def __init__(self, num_videos: int, frames: int, size: Tuple[int, int], split: Literal["train","val"],
-                 channels: int = 1, seed: int = 123):
-        self.num_videos = num_videos if split == "train" else max(16, num_videos // 10)
-        self.frames = frames
-        self.h, self.w = size
-        self.channels = channels
-        self.rng = np.random.RandomState(seed + (0 if split == "train" else 1))
+# Define the VsdVideoDataset class within this file or ensure it's imported
+# Assuming the VsdVideoDataset class is defined in the previous steps and accessible
+class VsdVideoDataset(Dataset):
+    """PyTorch Dataset for loading VSD video data from HDF5 file."""
 
-    def __len__(self):
-        return self.num_videos
+    def __init__(self, hdf5_path: str,
+                 normalize: bool = False,
+                 normalization_type: str = "baseline_zscore",
+                 baseline_frame: int = 20,
+                 frame_start: int = 0,
+                 frame_end: Optional[int] = None,
+                 cache_dir: Optional[str] = None,
+                 normalization_kwargs: Optional[Dict] = None,
+                 window_size: int = 0):
+        """
+        Args:
+            hdf5_path (str): Path to the HDF5 file.
+            normalize (bool): Whether to apply normalization.
+            normalization_type (str): Type of normalization ('baseline_zscore' or 'baseline_robust').
+            baseline_frame (int): Frame index to use as baseline (default: 20).
+            frame_start (int): Start frame index for slicing trials.
+            frame_end (int): End frame index for slicing trials (if None, uses all frames).
+            cache_dir (str): Directory to cache normalization statistics.
+            normalization_kwargs (dict): Additional kwargs for normalization.
+        """
+        self.hdf5_path = hdf5_path
+        self.normalize = normalize
+        self.normalization_type = normalization_type
+        self.baseline_frame = baseline_frame
+        self.frame_start = frame_start
+        self.frame_end = frame_end
+        self.cache_dir = cache_dir
+        self.normalization_kwargs = normalization_kwargs or {}
+        self.window_size = int(window_size) if window_size is not None else 0
+        
+        # Build data structure
+        # If windowing is enabled (window_size > 0), store (group, dataset, trial_idx, window_idx)
+        # Otherwise store (group, dataset, trial_idx, None)
+        self.data_structure: list[Tuple[str, str, int, Optional[int]]] = []
 
-    def __getitem__(self, idx):
-        T, H, W = self.frames, self.h, self.w
-        vid = np.zeros((T, H, W), dtype=np.float32)
-        # random walk center
-        x, y = self.rng.randint(W//4, 3*W//4), self.rng.randint(H//4, 3*H//4)
-        vx, vy = self.rng.randn()*0.8, self.rng.randn()*0.8
-        sigma = self.rng.uniform(2.0, 4.0)
-        for t in range(T):
-            x = (x + vx)
-            y = (y + vy)
-            x = max(0, min(W-1, x))
-            y = max(0, min(H-1, y))
-            xx, yy = np.meshgrid(np.arange(W), np.arange(H))
-            blob = np.exp(-(((xx - x)**2 + (yy - y)**2) / (2*sigma**2)))
-            vid[t] = blob
-        # normalize and add noise
-        vid = (vid - vid.mean()) / (vid.std() + 1e-6)
-        vid += self.rng.randn(T, H, W).astype(np.float32) * 0.1
-        vid = vid[None, ...]  # C=1
-        sample = {"video": torch.from_numpy(vid), "mask": None}
-        return sample
+        with h5py.File(self.hdf5_path, 'r') as f:
+            for group_name in f.keys():
+                group = f[group_name]
+                for dataset_name in group.keys():
+                    dataset = group[dataset_name]
+                    num_trials = dataset.shape[-1]
+                    # Assuming data is (pixels, frames, trials)
+                    # Determine effective frame range after slicing
+                    total_frames = dataset.shape[1]
+                    start = max(0, self.frame_start)
+                    end = (self.frame_end if self.frame_end is not None else total_frames - 1)
+                    end = min(end, total_frames - 1)
+                    if end < start:
+                        start, end = 0, total_frames - 1
+                    effective_frames = (end - start + 1)
 
+                    for trial_index in range(num_trials):
+                        if self.window_size and self.window_size > 0:
+                            num_windows = effective_frames // self.window_size
+                            for window_idx in range(num_windows):
+                                self.data_structure.append((group_name, dataset_name, trial_index, window_idx))
+                        else:
+                            self.data_structure.append((group_name, dataset_name, trial_index, None))
 
-def build_dataset(cfg, split="train"):
-    if cfg["dataset"] == "dummy":
-        return DummyVideoDataset(num_videos=cfg["num_videos"],
-                                 frames=cfg["frames"],
-                                 size=(cfg["height"], cfg["width"]),
-                                 split=split,
-                                 channels=cfg["channels"])
-    else:
-        raise ValueError(f"Unknown dataset: {cfg['dataset']}")
+        self.total_samples = len(self.data_structure)
+        
+        # Initialize normalization if enabled
+        if self.normalize:
+            self._setup_normalization()
+        else:
+            self.normalizer = None
+            self.normalization_stats = None
+
+    def _setup_normalization(self):
+        """Setup normalization by computing statistics if needed"""
+        print(f"Setting up {self.normalization_type} normalization...")
+        
+        # Create normalizer
+        self.normalizer = get_normalizer(
+            normalization_type=self.normalization_type,
+            baseline_frame=self.baseline_frame,
+            cache_dir=self.cache_dir,
+            **self.normalization_kwargs
+        )
+        
+        # Compute normalization statistics
+        self.normalization_stats = self.normalizer.compute_stats(
+            hdf5_path=self.hdf5_path,
+            frame_start=self.frame_start,
+            frame_end=self.frame_end
+        )
+
+    def __len__(self) -> int:
+        """
+        Returns the total number of samples in the dataset.
+        """
+        return self.total_samples
+
+    def __getitem__(self, idx: int):
+        """
+        Loads and returns a sample from the dataset.
+
+        Args:
+            idx (int): Index of the sample.
+
+        Returns:
+            dict: Dictionary containing 'video' and 'mask' tensors.
+        """
+        if idx >= self.total_samples:
+            raise IndexError("Dataset index out of range")
+
+        group_name, dataset_name, trial_index, window_idx = self.data_structure[idx]
+
+        with h5py.File(self.hdf5_path, 'r') as f:
+            dataset = f[group_name][dataset_name]
+            # Data is (pixels, frames, trials); slice the correct trial
+            trial_data = dataset[:, :, trial_index]
+
+            # Apply frame slicing first
+            total_frames = trial_data.shape[1]
+            start = max(0, self.frame_start)
+            end = (self.frame_end if self.frame_end is not None else total_frames - 1)
+            end = min(end, total_frames - 1)
+            if end < start:
+                start, end = 0, total_frames - 1
+            sliced = trial_data[:, start:end + 1]
+
+            # Apply window slicing if requested
+            if self.window_size and self.window_size > 0:
+                win_start = window_idx * self.window_size
+                win_end = win_start + self.window_size
+                data_slice = sliced[:, win_start:win_end]
+                abs_start_frame = start + win_start
+                abs_end_frame = start + win_end - 1
+            else:
+                data_slice = sliced
+                abs_start_frame = start
+                abs_end_frame = end
+
+        # Reshape the data slice to (channels, frames, height, width)
+        # Assuming channels = 1, height = 100, width = 100
+        height, width = 100, 100
+        frames = data_slice.shape[1]
+        reshaped_data = data_slice.reshape(height, width, frames)
+
+        # Rearrange to (channels, frames, height, width) - (1, frames, 100, 100)
+        # Add a channel dimension
+        tensor_data = torch.from_numpy(reshaped_data).unsqueeze(0).permute(0, 3, 1, 2)
+
+        # Apply normalization if enabled
+        if self.normalize and self.normalizer is not None:
+            tensor_data = self.normalizer.normalize(tensor_data, self.normalization_stats)
+
+        # Create a dummy mask tensor with the same spatial and temporal dimensions as the video tensor
+        # Assuming mask is single channel (1, frames, height, width)
+        mask_tensor = torch.zeros(1, frames, height, width, dtype=torch.float32)
+
+        return {"video": tensor_data, "mask": mask_tensor, "start_frame": int(abs_start_frame), "end_frame": int(abs_end_frame)} # Return a dictionary for consistency with DummyVideoDataset
