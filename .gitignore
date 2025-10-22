@@ -209,4 +209,4 @@ __marimo__/
 # Cache files for normalization statistics
 cache/
 *.pkl
-*.cache
+*.cachetest_vsd_data.hdf5
