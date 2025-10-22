@@ -34,7 +34,7 @@ def load_dataset(
         baseline_frame = cfg.get("baseline_frame", 20)
         cache_dir = cfg.get("cache_dir", "cache")
         normalization_kwargs = cfg.get("normalization_kwargs", {})
-        window_size = cfg.get("window_size", 0)
+        clip_length = cfg.get("clip_length", 1)
         
         # Frame slicing settings
         frame_start = cfg.get("frame_start", 0)
@@ -50,7 +50,7 @@ def load_dataset(
             frame_end=frame_end,
             cache_dir=cache_dir,
             normalization_kwargs=normalization_kwargs,
-            window_size=window_size
+            clip_length=clip_length
         )
         
         # Handle train/val split

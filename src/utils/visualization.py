@@ -3,7 +3,10 @@
 # ==================================
 
 import torch
-import torchvision.utils as vutils
+try:
+    import torchvision.utils as vutils
+except Exception:  # make optional for environments without torchvision
+    vutils = None
 import os
 import matplotlib.pyplot as plt
 import numpy as np
@@ -26,6 +29,8 @@ def save_reconstruction_grid(target, recon, mask, fname="recon.png"):
             row = torch.cat([tgt[:, t], rec[:, t]], dim=-1)  # (C, H, 2W)
             rows.append(row)
         grid = torch.cat(rows, dim=-2)  # (C, 8*H, 2W)
+        if vutils is None:
+            raise ImportError("torchvision is required for save_reconstruction_grid. Please install torchvision.")
         vutils.save_image((grid - grid.min())/(grid.max()-grid.min()+1e-6), fname)
 
 
