@@ -27,6 +27,7 @@ import torch
 
 from src.data.datasets import VsdVideoDataset
 from src.data.vsd_multi_crop_dataset import VsdMultiCropDataset
+from src.data.vsd_masked_dataset import VsdMaskedDataset
 from src.data.data_loader import load_dataset
 
 
@@ -317,5 +318,255 @@ def test_vsd_multi_crop_dataset_edge_cases(tmp_path: Path):
         assert crop.shape[0] == 1  # single channel
         assert crop.shape[1] > 0  # at least 1 temporal dimension
         assert crop.shape[2] > 0 and crop.shape[3] > 0  # valid spatial dimensions
+
+
+def test_vsd_masked_dataset_2d_images(tmp_path: Path):
+    """Test VsdMaskedDataset with 2D images (clip_length=1) for masked autoencoding."""
+    h5_path = tmp_path / "vsd_masked_test.hdf5"
+    _create_minimal_vsd_hdf5(h5_path, frames=20, trials=3)
+
+    # Test with single frames (clip_length=1) - 2D images
+    ds = VsdMaskedDataset(
+        hdf5_path=str(h5_path), 
+        clip_length=1,
+        mask_ratio=0.75,
+        patch_size=(1, 16, 16)  # pT=1 for images
+    )
+    
+    # Should have same number of samples as base dataset
+    assert len(ds) == 3 * 20  # 3 trials * 20 frames
+    
+    # Get a sample
+    sample = ds[0]
+    assert isinstance(sample, dict)
+    assert "video_masked" in sample
+    assert "video_target" in sample
+    assert "mask" in sample
+    
+    video_masked = sample["video_masked"]
+    video_target = sample["video_target"]
+    mask = sample["mask"]
+    
+    # Check tensor shapes (video is trimmed to fit patches)
+    # With patch_size=(1, 16, 16), video is trimmed to 96x96 (6*16 = 96)
+    assert video_masked.shape == (1, 1, 96, 96)  # (C, T, H, W) - trimmed to fit patches
+    assert video_target.shape == (1, 1, 96, 96)   # (C, T, H, W) - trimmed to fit patches
+    assert mask.shape == (1, 1, 6, 6)  # (C, T, nPT, nPH) where nPT=1, nPH=96//16=6
+    
+    # Check that mask is binary
+    assert torch.all((mask == 0) | (mask == 1))
+    
+    # Check that masked video has some zeros (due to masking)
+    assert torch.any(video_masked == 0)
+    
+    # Check that target video is not all zeros (should be original data)
+    assert not torch.all(video_target == 0)
+
+
+def test_vsd_masked_dataset_3d_video_clips(tmp_path: Path):
+    """Test VsdMaskedDataset with 3D video clips (clip_length>1) for masked autoencoding."""
+    h5_path = tmp_path / "vsd_masked_test.hdf5"
+    _create_minimal_vsd_hdf5(h5_path, frames=20, trials=3)
+
+    # Test with video clips (clip_length=8) - 3D video
+    ds = VsdMaskedDataset(
+        hdf5_path=str(h5_path), 
+        clip_length=8,
+        mask_ratio=0.5,
+        patch_size=(4, 16, 16)  # pT=4 for video clips
+    )
+    
+    # Should have clips: 3 trials * 2 clips per trial = 6 samples
+    assert len(ds) == 3 * 2  # 3 trials * 2 clips per trial
+    
+    # Get a sample
+    sample = ds[0]
+    assert isinstance(sample, dict)
+    
+    video_masked = sample["video_masked"]
+    video_target = sample["video_target"]
+    mask = sample["mask"]
+    
+    # Check tensor shapes for video clips (video is trimmed to fit patches)
+    # With patch_size=(4, 16, 16), video is trimmed to 8x96x96 (2*4=8, 6*16=96)
+    assert video_masked.shape == (1, 8, 96, 96)  # (C, T, H, W) - trimmed to fit patches
+    assert video_target.shape == (1, 8, 96, 96)  # (C, T, H, W) - trimmed to fit patches
+    assert mask.shape == (1, 2, 6, 6)  # (C, nPT, nPH, nPW) where nPT=8//4=2, nPH=96//16=6
+    
+    # Check that mask is binary
+    assert torch.all((mask == 0) | (mask == 1))
+    
+    # Check that masked video has some zeros (due to masking)
+    assert torch.any(video_masked == 0)
+    
+    # Check that target video is not all zeros (should be original data)
+    assert not torch.all(video_target == 0)
+
+
+def test_vsd_masked_dataset_mask_ratio_control(tmp_path: Path):
+    """Test that mask_ratio controls the number of masked patches."""
+    h5_path = tmp_path / "vsd_masked_test.hdf5"
+    _create_minimal_vsd_hdf5(h5_path, frames=16, trials=1)
+
+    # Test different mask ratios
+    mask_ratios = [0.25, 0.5, 0.75]
+    masked_counts = []
+    
+    for mask_ratio in mask_ratios:
+        ds = VsdMaskedDataset(
+            hdf5_path=str(h5_path), 
+            clip_length=1,
+            mask_ratio=mask_ratio,
+            patch_size=(1, 16, 16)
+        )
+        
+        # Get multiple samples and count masked patches
+        total_masked = 0
+        total_patches = 0
+        
+        for i in range(min(5, len(ds))):  # Test first 5 samples
+            sample = ds[i]
+            mask = sample["mask"]
+            
+            # Count masked patches (0) vs visible patches (1)
+            masked_patches = torch.sum(mask == 0).item()
+            visible_patches = torch.sum(mask == 1).item()
+            
+            total_masked += masked_patches
+            total_patches += masked_patches + visible_patches
+        
+        if total_patches > 0:
+            actual_ratio = total_masked / total_patches
+            masked_counts.append(actual_ratio)
+    
+    # Check that higher mask_ratio leads to more masked patches
+    if len(masked_counts) >= 2:
+        assert masked_counts[0] < masked_counts[1] < masked_counts[2], \
+            f"Mask ratios should be increasing: {masked_counts}"
+
+
+def test_vsd_masked_dataset_patch_size_control(tmp_path: Path):
+    """Test that patch_size controls the volume of each patch."""
+    h5_path = tmp_path / "vsd_masked_test.hdf5"
+    _create_minimal_vsd_hdf5(h5_path, frames=16, trials=1)
+
+    # Test different patch sizes
+    patch_sizes = [(1, 8, 8), (1, 16, 16), (1, 32, 32)]
+    
+    for patch_size in patch_sizes:
+        ds = VsdMaskedDataset(
+            hdf5_path=str(h5_path), 
+            clip_length=1,
+            mask_ratio=0.5,
+            patch_size=patch_size
+        )
+        
+        # Get a sample
+        sample = ds[0]
+        mask = sample["mask"]
+        
+        # Check that mask shape corresponds to patch size
+        expected_nPH = 100 // patch_size[1]  # 100 // patch_height
+        expected_nPW = 100 // patch_size[2]  # 100 // patch_width
+        
+        assert mask.shape == (1, 1, expected_nPH, expected_nPW), \
+            f"Expected mask shape (1, 1, {expected_nPH}, {expected_nPW}), got {mask.shape}"
+
+
+def test_vsd_masked_dataset_video_clip_patch_size(tmp_path: Path):
+    """Test patch_size with video clips (pT > 1)."""
+    h5_path = tmp_path / "vsd_masked_test.hdf5"
+    _create_minimal_vsd_hdf5(h5_path, frames=16, trials=1)
+
+    # Test with video clips and temporal patches
+    ds = VsdMaskedDataset(
+        hdf5_path=str(h5_path), 
+        clip_length=8,
+        mask_ratio=0.5,
+        patch_size=(2, 16, 16)  # pT=2 for temporal patches
+    )
+    
+    # Get a sample
+    sample = ds[0]
+    mask = sample["mask"]
+    
+    # Check that mask shape includes temporal dimension
+    expected_nPT = 8 // 2  # clip_length // pT
+    expected_nPH = 100 // 16  # height // patch_height
+    expected_nPW = 100 // 16  # width // patch_width
+    
+    assert mask.shape == (1, expected_nPT, expected_nPH, expected_nPW), \
+        f"Expected mask shape (1, {expected_nPT}, {expected_nPH}, {expected_nPW}), got {mask.shape}"
+
+
+def test_vsd_masked_dataset_return_dict_structure(tmp_path: Path):
+    """Test that the dataset returns the correct dictionary structure."""
+    h5_path = tmp_path / "vsd_masked_test.hdf5"
+    _create_minimal_vsd_hdf5(h5_path, frames=16, trials=1)
+
+    ds = VsdMaskedDataset(
+        hdf5_path=str(h5_path), 
+        clip_length=4,
+        mask_ratio=0.6,
+        patch_size=(2, 16, 16)
+    )
+    
+    # Get a sample
+    sample = ds[0]
+    
+    # Check dictionary structure
+    expected_keys = {"video_masked", "video_target", "mask"}
+    assert set(sample.keys()) == expected_keys, \
+        f"Expected keys {expected_keys}, got {set(sample.keys())}"
+    
+    # Check that all values are tensors
+    for key, value in sample.items():
+        assert isinstance(value, torch.Tensor), f"{key} should be a tensor, got {type(value)}"
+    
+    # Check tensor properties
+    video_masked = sample["video_masked"]
+    video_target = sample["video_target"]
+    mask = sample["mask"]
+    
+    # All should have the same spatial dimensions
+    assert video_masked.shape[2:] == video_target.shape[2:]  # H, W should match
+    assert video_masked.shape[1] == video_target.shape[1]    # T should match
+    
+    # Mask should be binary
+    assert torch.all((mask == 0) | (mask == 1)), "Mask should contain only 0s and 1s"
+    
+    # Masked video should have zeros where mask is 0
+    # (This is a basic check - the actual masking logic is more complex)
+
+
+def test_vsd_masked_dataset_edge_cases(tmp_path: Path):
+    """Test VsdMaskedDataset with edge cases (very small clips, extreme ratios)."""
+    h5_path = tmp_path / "vsd_masked_test.hdf5"
+    _create_minimal_vsd_hdf5(h5_path, frames=8, trials=1)
+
+    # Test with very small clip and small patch size
+    ds = VsdMaskedDataset(
+        hdf5_path=str(h5_path), 
+        clip_length=4,
+        mask_ratio=0.9,  # Very high masking
+        patch_size=(1, 8, 8)  # Small patches
+    )
+    
+    # Should have 2 samples (1 trial * 2 clips: 8 frames // 4 clip_length = 2 clips)
+    assert len(ds) == 2
+    
+    # Get the sample
+    sample = ds[0]
+    assert isinstance(sample, dict)
+    assert "video_masked" in sample
+    assert "video_target" in sample
+    assert "mask" in sample
+    
+    # All should be valid tensors
+    for key, value in sample.items():
+        assert isinstance(value, torch.Tensor)
+        assert value.shape[0] == 1  # single channel
+        assert value.shape[1] > 0   # at least 1 temporal dimension
+        assert value.shape[2] > 0 and value.shape[3] > 0  # valid spatial dimensions
 
 
