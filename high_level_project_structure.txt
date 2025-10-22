@@ -1,0 +1,37 @@
+vsd_foundation/
+│
+├── data/                         # Everything about loading and augmenting brain videos
+│   ├── base_dataset.py
+│   ├── vsd_multi_crop_dataset.py     # DINO data pipeline
+│   ├── vsd_masked_dataset.py         # MAE / VideoMAE pipeline
+│   └── transforms_3d.py              # Shared spatiotemporal augmentations
+│
+├── models/
+│   ├── backbone/                    # Encoders
+│   │   ├── r3d_18_wrapper.py
+│   │   ├── vsd_mae_encoder.py
+│   │   └── vsd_vit_encoder.py
+│   ├── heads/
+│   │   ├── dino_head.py
+│   │   └── mae_decoder.py
+│   └── systems/
+│       ├── dino_system.py           # student-teacher + loss
+│       ├── mae_system.py            # masking + reconstruction loss
+│       └── base_system.py           # abstract interface every system implements
+│
+├── engine/
+│   ├── trainer.py                   # Generic training loop (reads system type)
+│   ├── evaluator.py                 # Common evaluation routines (k‑NN, probe)
+│   └── logger.py                    # Metrics, checkpoints, visualization
+│
+├── configs/
+│   ├── dino_config.yaml
+│   ├── mae_config.yaml
+│   └── experiment_template.yaml
+│
+├── train.py                         # Entry point: parser → Trainer.build()
+└── utils/
+    ├── schedule.py                  # LR schedulers, EMA updates
+    ├── metrics.py
+    └── io_utils.py                  # HDF5 helpers
+
