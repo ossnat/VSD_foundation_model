@@ -4,6 +4,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import random # Import random for selecting a random sample
+from torch.utils.data import DataLoader
 
 # Ensure project root is on sys.path for imports
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -58,7 +59,7 @@ def main():
     # Make sure the 'vsd_hdf5_path' points to your HDF5 file
     cfg = {
         "dataset": "vsd",
-        "vsd_hdf5_path": Path(r"G:\My Drive\HDF5_DATA_AFTER_PREPROCESSING2\vsd_video_data.hdf5"),
+        "hdf5_path": Path(r"G:\My Drive\HDF5_DATA_AFTER_PREPROCESSING2\vsd_video_data.hdf5"),
         "normalize": True,
         "normalization_type": "baseline_zscore",
         "baseline_frame": 20,
@@ -67,11 +68,17 @@ def main():
         "batch_size": 4, # You can adjust the batch size
         "num_workers": 2, # You can adjust the number of workers
         "shuffle": True, # Set to True to shuffle the data
-        "window_size": 0
+        "clip_length": 100
     }
 
-    # Use the load_dataset function to create a DataLoader
-    vsd_dataloader = load_dataset(cfg)
+    # Split data at trial level
+    train_idx, val_idx = split_data(hdf5_path, split_ratio=0.8, random_seed=42)
+
+    # Create the dataset
+    train_dataset = create_dataset(dataset_name="vsd_video", cfg=cfg, trial_indices=train_idx)
+
+    # Create a DataLoader for the dataset
+    vsd_dataloader = DataLoader(train_dataset, batch_size=cfg['batch_size'], shuffle=cfg['shuffle'], num_workers=cfg['num_workers'])
 
     print("DataLoader created successfully.")
 
