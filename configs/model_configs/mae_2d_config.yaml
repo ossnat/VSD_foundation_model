@@ -1,0 +1,48 @@
+# ================================
+# MAE 2D Configuration
+# ================================
+
+experiment:
+  name: "mae_2d_vsd"
+  output_dir: "./outputs/mae_2d"
+  seed: 17
+  device: "cuda"  # or "cpu"
+
+model:
+  type: "2d"  # Determines which backbone/decoder to use
+  system: "mae"  # System type: "mae" or "dino"
+  
+  # Backbone settings
+  backbone:
+    name: "resnet18"
+    pretrained: false
+    projection_dim: null  # Not used in MAE
+  
+  # Decoder settings
+  decoder:
+    in_channels: 512  # ResNet18 output
+    out_channels: 1   # VSD single channel
+    hidden_dim: 256
+
+loss:
+  normalize: true
+
+training:
+  epochs: 100
+  lr: 1e-4
+  weight_decay: 0.05
+  warmup_epochs: 10
+  
+  # Learning rate scheduler
+  scheduler:
+    type: "cosine"
+    min_lr: 1e-6
+  
+  # Checkpointing
+  save_every: 10
+  checkpoint_dir: "./checkpoints/mae_2d"
+
+evaluation:
+  eval_every: 5
+  metrics: ["mse_masked", "mse_overall"]
+
