@@ -81,11 +81,33 @@ class MAESystem(BaseSystem):
         video_target = batch["video_target"]
         mask = batch["mask"]
         
+        # Handle dimension differences: 2D images may come as (B, C, T=1, H, W) or (B, C, H, W)
+        # Check if temporal dimension exists and is 1 (2D case)
+        is_2d = False
+        if len(video_target.shape) == 5 and video_target.shape[2] == 1:
+            # Squeeze temporal dimension for 2D: (B, C, 1, H, W) -> (B, C, H, W)
+            is_2d = True
+            video_masked = video_masked.squeeze(2)  # (B, C, H, W)
+            video_target = video_target.squeeze(2)  # (B, C, H, W)
+            # Mask from dataset may be (B, 1, nPT, nPH, nPW) or (B, 1, nPH, nPW)
+            if len(mask.shape) == 5:
+                mask = mask.squeeze(2)  # Remove temporal patch dimension if present
+            if len(mask.shape) == 4 and mask.shape[1] == 1:
+                # Expand mask to match video: (B, 1, nPH, nPW) -> (B, 1, H, W)
+                H, W = video_target.shape[2], video_target.shape[3]
+                # Use interpolate to expand mask to full resolution
+                mask = F.interpolate(mask, size=(H, W), mode='nearest')
+        
         # Encode masked input
         features = self.encoder(video_masked)
         
-        # Decode to reconstruct
-        reconstruction = self.decoder(features)
+        # Decode to reconstruct - pass target size to ensure correct output dimensions
+        if is_2d or len(video_target.shape) == 4:  # 2D: (B, C, H, W)
+            target_size = (video_target.shape[2], video_target.shape[3])
+            reconstruction = self.decoder(features, target_size=target_size)
+        else:  # 3D: (B, C, T, H, W)
+            target_size = (video_target.shape[2], video_target.shape[3], video_target.shape[4])
+            reconstruction = self.decoder(features, target_size=target_size)
         
         # Compute loss only on masked patches
         loss = self.loss_fn(reconstruction, video_target, mask)
