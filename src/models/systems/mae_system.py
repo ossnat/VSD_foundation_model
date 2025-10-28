@@ -84,8 +84,13 @@ class MAESystem(BaseSystem):
         # Encode masked input
         features = self.encoder(video_masked)
         
-        # Decode to reconstruct
-        reconstruction = self.decoder(features)
+        # Decode to reconstruct - pass target size to ensure correct output dimensions
+        if len(video_target.shape) == 4:  # 2D: (B, C, H, W)
+            target_size = (video_target.shape[2], video_target.shape[3])
+            reconstruction = self.decoder(features, target_size=target_size)
+        else:  # 3D: (B, C, T, H, W)
+            target_size = (video_target.shape[2], video_target.shape[3], video_target.shape[4])
+            reconstruction = self.decoder(features, target_size=target_size)
         
         # Compute loss only on masked patches
         loss = self.loss_fn(reconstruction, video_target, mask)

@@ -1,7 +1,6 @@
-from .cnn3d import Simple3DEncoder
-from .mae import VideoMAE
-
-
+# Legacy imports - commented out to avoid import errors
+# from .cnn3d import Simple3DEncoder
+# from .mae import VideoMAE
 
 
 def build_ssl_model(cfg):
