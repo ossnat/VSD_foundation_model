@@ -1,4 +1,9 @@
 # test_mae_system.py
+import sys
+import os
+# Add project root to path 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import torch
 import torch.nn as nn
 
@@ -53,14 +58,14 @@ def test_mae_2d():
     
     # Test backward pass
     loss.backward()
-    print("\n✅ Backward pass successful")
+    print("\n[OK] Backward pass successful")
     
     # Test optimizer
     optimizer = system.get_optimizer()
     optimizer.step()
-    print("✅ Optimizer step successful")
+    print("[OK] Optimizer step successful")
     
-    print("\n✅ MAE 2D test passed!\n")
+    print("\n[OK] MAE 2D test passed!\n")
 
 
 def test_mae_3d():
@@ -105,14 +110,14 @@ def test_mae_3d():
     
     # Test backward
     loss.backward()
-    print("\n✅ Backward pass successful")
+    print("\n[OK] Backward pass successful")
     
     # Test optimizer
     optimizer = system.get_optimizer()
     optimizer.step()
-    print("✅ Optimizer step successful")
+    print("[OK] Optimizer step successful")
     
-    print("\n✅ MAE 3D test passed!\n")
+    print("\n[OK] MAE 3D test passed!\n")
 
 
 def test_reconstruction_shapes():
@@ -127,13 +132,13 @@ def test_reconstruction_shapes():
     
     input_2d = torch.randn(2, 1, 100, 100)
     features_2d = encoder_2d(input_2d)
-    reconstruction_2d = decoder_2d(features_2d)
+    reconstruction_2d = decoder_2d(features_2d, target_size=(input_2d.shape[2], input_2d.shape[3]))
     
     print(f"2D Input: {input_2d.shape}")
     print(f"2D Features: {features_2d.shape}")
     print(f"2D Reconstruction: {reconstruction_2d.shape}")
     assert reconstruction_2d.shape == input_2d.shape, "2D shape mismatch!"
-    print("✅ 2D reconstruction shape correct\n")
+    print("[OK] 2D reconstruction shape correct\n")
     
     # 3D test
     encoder_3d = MAER3D18Backbone(pretrained=False)
@@ -141,13 +146,13 @@ def test_reconstruction_shapes():
     
     input_3d = torch.randn(2, 1, 5, 100, 100)
     features_3d = encoder_3d(input_3d)
-    reconstruction_3d = decoder_3d(features_3d)
+    reconstruction_3d = decoder_3d(features_3d, target_size=(input_3d.shape[2], input_3d.shape[3], input_3d.shape[4]))
     
     print(f"3D Input: {input_3d.shape}")
     print(f"3D Features: {features_3d.shape}")
     print(f"3D Reconstruction: {reconstruction_3d.shape}")
     assert reconstruction_3d.shape == input_3d.shape, "3D shape mismatch!"
-    print("✅ 3D reconstruction shape correct\n")
+    print("[OK] 3D reconstruction shape correct\n")
 
 
 def test_loss_computation():
@@ -177,25 +182,25 @@ def test_loss_computation():
     
     # Loss should be close to 1.0 (MSE of 1-0=1)
     assert 0.9 < loss.item() < 1.1, f"Loss value unexpected: {loss.item()}"
-    print("✅ Loss computation correct\n")
+    print("[OK] Loss computation correct\n")
 
 
-# if __name__ == "__main__":
-#     print("\n" + "="*60)
-#     print("Running MAE System Tests")
-#     print("="*60)
+if __name__ == "__main__":
+    print("\n" + "="*60)
+    print("Running MAE System Tests")
+    print("="*60)
     
-#     try:
-#         test_mae_2d()
-#         test_mae_3d()
-#         test_reconstruction_shapes()
-#         test_loss_computation()
+    try:
+        test_mae_2d()
+        test_mae_3d()
+        test_reconstruction_shapes()
+        test_loss_computation()
         
-#         print("\n" + "="*60)
-#         print("✅ All tests passed successfully!")
-#         print("="*60 + "\n")
+        print("\n" + "="*60)
+        print("[OK] All tests passed successfully!")
+        print("="*60 + "\n")
         
-#     except Exception as e:
-#         print(f"\n❌ Test failed with error: {e}")
-#         import traceback
-#         traceback.print_exc()
+    except Exception as e:
+        print(f"\n[FAIL] Test failed with error: {e}")
+        import traceback
+        traceback.print_exc()
