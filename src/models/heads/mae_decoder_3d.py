@@ -1,69 +1,57 @@
 # src/models/heads/mae_decoder_3d.py
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
 class MAEDecoder3D(nn.Module):
     """
-    3D Decoder for Video Masked Autoencoder.
-    Reconstructs masked 3D videos from encoded spatiotemporal feature maps.
-    
-    Architecture: 5 stages of transposed 3D convolutions
-    - 512 → 256 → 128 → 64 → 32 → 1 channels
-    - Upsampling: 8× temporal, 32× spatial
+    Lightweight decoder for 3D Video Masked Autoencoder (VideoMAE).
+    Upsamples spatiotemporal feature maps back to original video resolution.
     """
-    def __init__(self, in_channels=512, out_channels=1, hidden_dim=None):
+    def __init__(self,
+                 in_channels: int = 512,      # from R3D-18 encoder
+                 out_channels: int = 1,       # VSD is single channel
+                 hidden_dim: int = 256):
         super().__init__()
-        self.in_channels = in_channels
-        self.out_channels = out_channels
         
-        # Channel progression: 512 → 256 → 128 → 64 → 32 → 1
-        channels = [in_channels, 256, 128, 64, 32, out_channels]
-        
-        layers = []
-        for i in range(len(channels) - 1):
-            # For temporal upsampling, we need to handle it carefully
-            # First few layers upsample temporally, later ones focus on spatial
-            if i < 2:  # First 2 stages: upsample both temporal and spatial
-                kernel_size = (4, 4, 4)
-                stride = (2, 2, 2)
-                padding = (1, 1, 1)
-            else:  # Remaining stages: mainly spatial upsampling
-                kernel_size = (3, 4, 4)
-                stride = (1, 2, 2)  # Keep temporal same or slightly upsample
-                padding = (1, 1, 1)
+        # Decoder: upsample from (B, 512, T/8, H/32, W/32) → (B, 1, T, H, W)
+        self.decoder = nn.Sequential(
+            # Stage 1: 512 → 256, upsample 2x spatiotemporally
+            nn.ConvTranspose3d(in_channels, hidden_dim, kernel_size=(2,4,4), stride=(2,2,2), padding=(0,1,1)),
+            nn.BatchNorm3d(hidden_dim),
+            nn.ReLU(inplace=True),
             
-            layers.append(
-                nn.ConvTranspose3d(
-                    channels[i],
-                    channels[i + 1],
-                    kernel_size=kernel_size,
-                    stride=stride,
-                    padding=padding,
-                    bias=False
-                )
-            )
-            if i < len(channels) - 2:  # No BatchNorm/ReLU after final layer
-                layers.append(nn.BatchNorm3d(channels[i + 1]))
-                layers.append(nn.ReLU(inplace=True))
-        
-        self.decoder = nn.Sequential(*layers)
+            # Stage 2: 256 → 128, upsample 2x
+            nn.ConvTranspose3d(hidden_dim, hidden_dim // 2, kernel_size=(2,4,4), stride=(2,2,2), padding=(0,1,1)),
+            nn.BatchNorm3d(hidden_dim // 2),
+            nn.ReLU(inplace=True),
+            
+            # Stage 3: 128 → 64, upsample 2x
+            nn.ConvTranspose3d(hidden_dim // 2, hidden_dim // 4, kernel_size=(2,4,4), stride=(2,2,2), padding=(0,1,1)),
+            nn.BatchNorm3d(hidden_dim // 4),
+            nn.ReLU(inplace=True),
+            
+            # Stage 4: 64 → 32, upsample 2x
+            nn.ConvTranspose3d(hidden_dim // 4, hidden_dim // 8, kernel_size=(1,4,4), stride=(1,2,2), padding=(0,1,1)),
+            nn.BatchNorm3d(hidden_dim // 8),
+            nn.ReLU(inplace=True),
+            
+            # Stage 5: 32 → 1, final upsample
+            nn.ConvTranspose3d(hidden_dim // 8, out_channels, kernel_size=(1,4,4), stride=(1,2,2), padding=(0,1,1)),
+        )
     
-    def forward(self, features: torch.Tensor, target_size=None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, target_size: tuple = None) -> torch.Tensor:
         """
         Args:
-            features: Encoded spatiotemporal feature maps of shape (B, 512, T', H', W')
-            target_size: Optional (T, H, W) target size for exact size matching
-        
+            x: Encoded spatiotemporal feature maps (B, 512, T', H', W')
+            target_size: Optional (T, H, W) tuple to resize output to match input
         Returns:
-            Reconstructed video of shape (B, 1, T, H, W)
+            Reconstructed video (B, 1, T, H, W)
         """
-        reconstruction = self.decoder(features)  # (B, 1, T', H', W')
-        
-        # If target_size is provided, interpolate to exact size
+        out = self.decoder(x)
         if target_size is not None:
-            T, H, W = target_size
-            reconstruction = F.interpolate(reconstruction, size=(T, H, W), mode='trilinear', align_corners=False)
-        
-        return reconstruction
+            # Interpolate to match target size if provided
+            out = torch.nn.functional.interpolate(
+                out, size=target_size, mode='trilinear', align_corners=False
+            )
+        return out
