@@ -72,10 +72,10 @@ def main():
     }
 
     # Split data at trial level
-    train_idx, val_idx = split_data(hdf5_path, split_ratio=0.8, random_seed=42)
-
+    train_idx, val_idx, index_entries = split_data(hdf5_path, split_ratio=0.8, random_seed=42)
+    
     # Create the dataset
-    train_dataset = create_dataset(dataset_name="vsd_video", cfg=cfg, trial_indices=train_idx)
+    train_dataset = create_dataset(dataset_name="vsd_video", cfg=cfg, trial_indices=train_idx, index_entries=index_entries)
 
     # Create a DataLoader for the dataset
     vsd_dataloader = DataLoader(train_dataset, batch_size=cfg['batch_size'], shuffle=cfg['shuffle'], num_workers=cfg['num_workers'])

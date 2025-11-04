@@ -24,7 +24,9 @@ class VsdVideoDataset(Dataset):
                  cache_dir: Optional[str] = None,
                  normalization_kwargs: Optional[Dict] = None,
                  clip_length: int = 1,
-                 trial_indices: Optional[List[int]] = None):
+                 trial_indices: Optional[List[int]] = None,
+                 index_entries: Optional[List[Tuple[str, str, int]]] = None # if provided, trial_indices are treated as GLOBAL ids
+                 ):
         """
         Args:
             cfg (Dict[str, Any], optional): Configuration dictionary. If provided, parameters will be
@@ -58,6 +60,9 @@ class VsdVideoDataset(Dataset):
             # Extract trial_indices from config if provided
             if 'trial_indices' in cfg:
                 trial_indices = cfg.get('trial_indices', trial_indices)
+            # Extract index_entries mapping if provided; when present, trial_indices are GLOBAL ids
+            if 'index_entries' in cfg:
+                index_entries = cfg.get('index_entries', index_entries)
             
             # Extract normalization kwargs from config
             if normalization_kwargs is None:
@@ -77,11 +82,18 @@ class VsdVideoDataset(Dataset):
         self.normalization_kwargs = normalization_kwargs or {}
         self.clip_length = int(clip_length) if clip_length is not None else 1
         self.trial_indices = trial_indices
+        self.index_entries = index_entries
         
         # Build data structure
         # If windowing is enabled (window_size > 0), store (group, dataset, trial_idx, window_idx)
         # Otherwise store (group, dataset, trial_idx, None)
         self.data_structure: list[Tuple[str, str, int, Optional[int]]] = []
+
+        # Preselect (group, dataset, trial_idx) if using global ids
+        selected_triples = None
+        # If index_entries is provided, interpret trial_indices as GLOBAL ids
+        if self.index_entries is not None and self.trial_indices is not None:
+            selected_triples = set(self.index_entries[g] for g in self.trial_indices)
 
         with h5py.File(self.hdf5_path, 'r') as f:
             for group_name in f.keys():
@@ -98,10 +110,14 @@ class VsdVideoDataset(Dataset):
                         start, end = 0, total_frames - 1
                     effective_frames = end - start + 1
                     
-                    # Filter trials based on trial_indices if provided
-                    trials_to_process = range(num_trials)
-                    if self.trial_indices is not None:
-                        trials_to_process = [t for t in range(num_trials) if t in self.trial_indices]
+                    # Filter trials
+                    if selected_triples is not None:
+                        trials_to_process = [t for t in range(num_trials)
+                                             if (group_name, dataset_name, t) in selected_triples]
+                    else:
+                        trials_to_process = range(num_trials)
+                        if self.trial_indices is not None:
+                            trials_to_process = [t for t in range(num_trials) if t in self.trial_indices]
                     
                     for trial_index in trials_to_process:
                         if self.clip_length > 0 and self.clip_length <= effective_frames:
