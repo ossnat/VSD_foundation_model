@@ -103,64 +103,110 @@ def plot_frames_sequence(
     
     # Step 6: Plot the frames as a matrix
     num_frames_to_plot = frames_to_plot.shape[0]
-    rows = (num_frames_to_plot + cols - 1) // cols  # Calculate the number of rows
     
-    # Auto-calculate figsize if not provided
-    if figsize is None:
-        figsize = (cols * 1.5, rows * 1.5)
-    
-    fig, axes = plt.subplots(rows, cols, figsize=figsize)
-    axes = axes.flatten()  # Flatten the 2D array of axes for easier iteration
-    
-    # Set clipping values
-    if clipping is None:
-        global_min_plot = -0.003
-        global_max_plot = 0.003
-    else:
-        global_min_plot, global_max_plot = clipping
-    
-    # Plot each frame in a subplot
-    for i in range(num_frames_to_plot):
-        ax = axes[i]
-        # Use a heatmap colormap and apply consistent clipping
-        # Convert tensor to numpy for plotting
-        frame_data = frames_to_plot[i, :, :].numpy() - 1  # Subtract 1 as in original code
+    # Handle single frame case specially
+    if num_frames_to_plot == 1:
+        # Single frame: use a simple single subplot
+        if figsize is None:
+            figsize = (6, 6)
+        
+        fig, ax = plt.subplots(1, 1, figsize=figsize)
+        
+        # Set clipping values
+        if clipping is None:
+            global_min_plot = -0.003
+            global_max_plot = 0.003
+        else:
+            global_min_plot, global_max_plot = clipping
+        
+        # Extract the single frame
+        frame_data = frames_to_plot[0, :, :].numpy() - 1  # Subtract 1 as in original code
         im = ax.imshow(frame_data, cmap='hot', vmin=global_min_plot, vmax=global_max_plot)
-        # Use real frame indices if provided, otherwise use relative indices
+        
+        # Set title
         if real_frame_range is not None:
             real_start, real_end = real_frame_range
-            # Calculate the real frame index based on the selected range within the video tensor
-            tensor_frame_idx = start_frame + i
             tensor_total_frames = video_tensor.shape[1] if video_tensor.ndim == 4 else video_tensor.shape[0]
-            # Map tensor frame index to real frame index
-            frame_ratio = tensor_frame_idx / (tensor_total_frames - 1)
+            frame_ratio = start_frame / (tensor_total_frames - 1) if tensor_total_frames > 1 else 0
             real_frame_idx = int(real_start + frame_ratio * (real_end - real_start))
-            ax.set_title(f"Frame {real_frame_idx}", fontsize=8)
+            ax.set_title(f"Frame {real_frame_idx}", fontsize=12)
         else:
-            ax.set_title(f"Frame {start_frame + i}", fontsize=8)
+            ax.set_title(f"Frame {start_frame}", fontsize=12)
+        
         ax.axis('off')
-    
-    # Hide any unused subplots
-    for j in range(num_frames_to_plot, len(axes)):
-        axes[j].axis('off')
-    
-    # Set title first
-    fig.suptitle(title, fontsize=14)
-    
-    # Apply tight layout first to arrange subplots
-    plt.tight_layout()
-    
-    # Add a colorbar positioned to the right without overlapping
-    if len(axes) > 0:
-        # Create colorbar using the entire grid of subplots with more aggressive padding
-        cbar = fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.8, aspect=20, pad=0.05)
+        fig.suptitle(title, fontsize=14)
+        
+        # Add colorbar for single frame
+        cbar = fig.colorbar(im, ax=ax, shrink=0.8, aspect=20, pad=0.05)
         cbar.set_label('Intensity', rotation=270, labelpad=15)
         
-        # Force the colorbar to stay within the figure bounds
-        cbar.ax.set_position([0.85, 0.15, 0.02, 0.7])  # [left, bottom, width, height]
-    
-    # Final adjustment to ensure no overlap
-    plt.subplots_adjust(right=0.82)
+        plt.tight_layout()
+    else:
+        # Multiple frames: use grid layout
+        rows = (num_frames_to_plot + cols - 1) // cols  # Calculate the number of rows
+        
+        # Auto-calculate figsize if not provided
+        if figsize is None:
+            figsize = (cols * 1.5, rows * 1.5)
+        
+        fig, axes = plt.subplots(rows, cols, figsize=figsize)
+        # Handle axes array - flatten if it's a multi-dimensional array
+        if rows == 1 and cols == 1:
+            axes = [axes]
+        elif rows == 1 or cols == 1:
+            axes = axes.flatten() if isinstance(axes, np.ndarray) else [axes]
+        else:
+            axes = axes.flatten()
+        
+        # Set clipping values
+        if clipping is None:
+            global_min_plot = -0.003
+            global_max_plot = 0.003
+        else:
+            global_min_plot, global_max_plot = clipping
+        
+        # Plot each frame in a subplot
+        for i in range(num_frames_to_plot):
+            ax = axes[i]
+            # Use a heatmap colormap and apply consistent clipping
+            # Convert tensor to numpy for plotting
+            frame_data = frames_to_plot[i, :, :].numpy() - 1  # Subtract 1 as in original code
+            im = ax.imshow(frame_data, cmap='hot', vmin=global_min_plot, vmax=global_max_plot)
+            # Use real frame indices if provided, otherwise use relative indices
+            if real_frame_range is not None:
+                real_start, real_end = real_frame_range
+                # Calculate the real frame index based on the selected range within the video tensor
+                tensor_frame_idx = start_frame + i
+                tensor_total_frames = video_tensor.shape[1] if video_tensor.ndim == 4 else video_tensor.shape[0]
+                # Map tensor frame index to real frame index
+                frame_ratio = tensor_frame_idx / (tensor_total_frames - 1) if tensor_total_frames > 1 else 0
+                real_frame_idx = int(real_start + frame_ratio * (real_end - real_start))
+                ax.set_title(f"Frame {real_frame_idx}", fontsize=8)
+            else:
+                ax.set_title(f"Frame {start_frame + i}", fontsize=8)
+            ax.axis('off')
+        
+        # Hide any unused subplots
+        for j in range(num_frames_to_plot, len(axes)):
+            axes[j].axis('off')
+        
+        # Set title first
+        fig.suptitle(title, fontsize=14)
+        
+        # Apply tight layout first to arrange subplots
+        plt.tight_layout()
+        
+        # Add a colorbar positioned to the right without overlapping
+        if len(axes) > 0:
+            # Create colorbar using the entire grid of subplots with more aggressive padding
+            cbar = fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.8, aspect=20, pad=0.05)
+            cbar.set_label('Intensity', rotation=270, labelpad=15)
+            
+            # Force the colorbar to stay within the figure bounds
+            cbar.ax.set_position([0.85, 0.15, 0.02, 0.7])  # [left, bottom, width, height]
+        
+        # Final adjustment to ensure no overlap
+        plt.subplots_adjust(right=0.82)
     
     # Save if path provided
     if save_path:

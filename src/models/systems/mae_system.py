@@ -108,6 +108,10 @@ class MAESystem(BaseSystem):
         else:  # 3D: (B, C, T, H, W)
             target_size = (video_target.shape[2], video_target.shape[3], video_target.shape[4])
             reconstruction = self.decoder(features, target_size=target_size)
+            # Ensure 3D mask matches full (T, H, W) resolution: (B, 1, nPT, nPH, nPW) -> (B, 1, T, H, W)
+            if len(mask.shape) == 5 and mask.shape[1] == 1:
+                T, H, W = video_target.shape[2], video_target.shape[3], video_target.shape[4]
+                mask = F.interpolate(mask, size=(T, H, W), mode='nearest')
         
         # Compute loss only on masked patches
         loss = self.loss_fn(reconstruction, video_target, mask)

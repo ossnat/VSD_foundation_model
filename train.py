@@ -3,7 +3,7 @@ import argparse
 import yaml
 import torch
 from torch.utils.data import DataLoader
-from src.data import load_dataset
+from src.data import *
 from src.models import build_ssl_model
 from src.training.trainer import Trainer
 from src.utils.logger import TBLogger, set_seed
