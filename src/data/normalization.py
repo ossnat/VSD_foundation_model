@@ -111,8 +111,12 @@ class BaselineZScoreNormalizer(Normalizer):
         
         print(f"Computing baseline z-score statistics for frames {frame_start}-{frame_end}...")
         
-        # Collect all baseline frame data
-        baseline_data = []
+        height, width = 100, 100
+        
+        # Initialize running sums for incremental computation
+        sum_frames = torch.zeros(height, width, dtype=torch.float64)  # Use float64 for precision
+        sum_squared_frames = torch.zeros(height, width, dtype=torch.float64)
+        frame_count = 0
         
         with h5py.File(hdf5_path, 'r') as f:
             # Handle case where there are no groups (direct datasets)
@@ -145,16 +149,21 @@ class BaselineZScoreNormalizer(Normalizer):
                         baseline_frame_idx = min(self.baseline_frame, trial_sliced.shape[1] - 1)
                         baseline_frame_data = trial_sliced[:, baseline_frame_idx]
                         
-                        # Reshape to (height, width) and add to collection
-                        height, width = 100, 100
+                        # Reshape to (height, width)
                         baseline_frame_reshaped = baseline_frame_data.reshape(height, width)
-                        baseline_data.append(baseline_frame_reshaped)
+                        
+                        # Incrementally update statistics for this (group, dataset_name)
+                        frame_tensor = torch.from_numpy(baseline_frame_reshaped).double()
+                        sum_frames += frame_tensor
+                        sum_squared_frames += frame_tensor ** 2
+                        frame_count += 1
                     
                     # Handle 3D dataset (pixels, frames, trials) - multiple trials case
                     elif dataset_ndim == 3:
                         # Shape: (pixels, frames, trials)
                         num_trials = dataset_shape[-1]
                         
+                        # Process all trials in this (group, dataset_name) incrementally
                         for trial_idx in range(num_trials):
                             # Get trial data: shape (pixels, frames, trials)
                             trial_data = dataset[:, :, trial_idx]
@@ -166,28 +175,29 @@ class BaselineZScoreNormalizer(Normalizer):
                             baseline_frame_idx = min(self.baseline_frame, trial_sliced.shape[1] - 1)
                             baseline_frame_data = trial_sliced[:, baseline_frame_idx]
                             
-                            # Reshape to (height, width) and add to collection
-                            height, width = 100, 100
+                            # Reshape to (height, width)
                             baseline_frame_reshaped = baseline_frame_data.reshape(height, width)
-                            baseline_data.append(baseline_frame_reshaped)
+                            
+                            # Incrementally update statistics for this (group, dataset_name, trial)
+                            frame_tensor = torch.from_numpy(baseline_frame_reshaped).double()
+                            sum_frames += frame_tensor
+                            sum_squared_frames += frame_tensor ** 2
+                            frame_count += 1
                     else:
                         raise ValueError(f"Unsupported dataset dimensionality: {dataset_ndim}. "
                                        f"Expected 2D (pixels, frames) or 3D (pixels, frames, trials).")
         
-        if len(baseline_data) == 0:
+        if frame_count == 0:
             raise ValueError("No baseline data collected. Check dataset structure and frame indices.")
         
-        # Convert to tensor and stack
-        all_baseline_frames = torch.stack([torch.from_numpy(frame) for frame in baseline_data])  # (N, H, W)
-        
-        # Compute mean and std for each pixel across all trials
-        # If only one trial, mean/std will be computed from that single frame
-        mean_baseline = all_baseline_frames.mean(dim=0)  # (H, W)
-        std_baseline = all_baseline_frames.std(dim=0)    # (H, W)
+        # Compute final statistics from running sums
+        mean_baseline = sum_frames / frame_count  # (H, W)
+        variance = (sum_squared_frames / frame_count) - (mean_baseline ** 2)
+        std_baseline = torch.sqrt(variance.clamp(min=0))  # (H, W)
         
         # Reshape to match input tensor format: (C, 1, H, W)
-        mean_baseline = mean_baseline.unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)
-        std_baseline = std_baseline.unsqueeze(0).unsqueeze(0)    # (1, 1, H, W)
+        mean_baseline = mean_baseline.float().unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)
+        std_baseline = std_baseline.float().unsqueeze(0).unsqueeze(0)    # (1, 1, H, W)
         
         stats = {
             'mean': mean_baseline,

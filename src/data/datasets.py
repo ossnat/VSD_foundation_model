@@ -108,6 +108,12 @@ class VsdVideoDataset(Dataset):
         if end < start:
             start, end = 0, total_frames - 1
         effective_frames = end - start + 1
+        
+        # Pre-compute num_clips if clip_length is valid
+        if self.clip_length > 0 and self.clip_length <= effective_frames:
+            num_clips = effective_frames // self.clip_length
+        else:
+            num_clips = None  # Indicates single clip for entire range
 
         with h5py.File(self.hdf5_path, 'r') as f:
             for group_name in f.keys():
@@ -123,12 +129,10 @@ class VsdVideoDataset(Dataset):
                     
                     if is_2d:
                         # 2D dataset: shape (pixels, frames) - single trial
-                        # Frame range already computed before opening HDF5 file
                         
                         # For 2D datasets, use trial_index=None
-                        if self.clip_length > 0 and self.clip_length <= effective_frames:
+                        if num_clips is not None:
                             # Non-overlapping clips - use list comprehension for better performance
-                            num_clips = effective_frames // self.clip_length
                             clip_entries = [(group_name, dataset_name, None, start + (clip_idx * self.clip_length))
                                            for clip_idx in range(num_clips)]
                             self.data_structure.extend(clip_entries)
@@ -142,7 +146,6 @@ class VsdVideoDataset(Dataset):
                                            f"Expected 2D (pixels, frames) or 3D (pixels, frames, trials).")
                         
                         num_trials = dataset_shape[-1]
-                        # Frame range already computed before opening HDF5 file
                         
                         # Filter trials
                         if selected_triples is not None:
@@ -154,9 +157,8 @@ class VsdVideoDataset(Dataset):
                                 trials_to_process = [t for t in range(num_trials) if t in self.trial_indices]
                         
                         for trial_index in trials_to_process:
-                            if self.clip_length > 0 and self.clip_length <= effective_frames:
+                            if num_clips is not None:
                                 # Non-overlapping clips - use list comprehension for better performance
-                                num_clips = effective_frames // self.clip_length
                                 clip_entries = [(group_name, dataset_name, trial_index, start + (clip_idx * self.clip_length))
                                                for clip_idx in range(num_clips)]
                                 self.data_structure.extend(clip_entries)
