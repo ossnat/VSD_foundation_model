@@ -115,15 +115,28 @@ class BaselineZScoreNormalizer(Normalizer):
         baseline_data = []
         
         with h5py.File(hdf5_path, 'r') as f:
-            for group_name in f.keys():
+            # Handle case where there are no groups (direct datasets)
+            groups = list(f.keys())
+            if len(groups) == 0:
+                raise ValueError("HDF5 file contains no groups or datasets")
+            
+            for group_name in groups:
                 group = f[group_name]
-                for dataset_name in group.keys():
+                datasets = list(group.keys())
+                
+                # Handle case where there are no datasets in the group
+                if len(datasets) == 0:
+                    continue
+                
+                for dataset_name in datasets:
                     dataset = group[dataset_name]
-                    num_trials = dataset.shape[-1]
+                    dataset_shape = dataset.shape
+                    dataset_ndim = len(dataset_shape)
                     
-                    for trial_idx in range(num_trials):
-                        # Get trial data: shape (pixels, frames, trials)
-                        trial_data = dataset[:, :, trial_idx]
+                    # Handle 2D dataset (pixels, frames) - single trial case
+                    if dataset_ndim == 2:
+                        # Shape: (pixels, frames)
+                        trial_data = dataset[:, :]
                         
                         # Slice the specified frame range
                         trial_sliced = trial_data[:, frame_start:frame_end + 1]
@@ -136,17 +149,39 @@ class BaselineZScoreNormalizer(Normalizer):
                         height, width = 100, 100
                         baseline_frame_reshaped = baseline_frame_data.reshape(height, width)
                         baseline_data.append(baseline_frame_reshaped)
+                    
+                    # Handle 3D dataset (pixels, frames, trials) - multiple trials case
+                    elif dataset_ndim == 3:
+                        # Shape: (pixels, frames, trials)
+                        num_trials = dataset_shape[-1]
+                        
+                        for trial_idx in range(num_trials):
+                            # Get trial data: shape (pixels, frames, trials)
+                            trial_data = dataset[:, :, trial_idx]
+                            
+                            # Slice the specified frame range
+                            trial_sliced = trial_data[:, frame_start:frame_end + 1]
+                            
+                            # Get baseline frame (frame 20 by default, or closest available)
+                            baseline_frame_idx = min(self.baseline_frame, trial_sliced.shape[1] - 1)
+                            baseline_frame_data = trial_sliced[:, baseline_frame_idx]
+                            
+                            # Reshape to (height, width) and add to collection
+                            height, width = 100, 100
+                            baseline_frame_reshaped = baseline_frame_data.reshape(height, width)
+                            baseline_data.append(baseline_frame_reshaped)
+                    else:
+                        raise ValueError(f"Unsupported dataset dimensionality: {dataset_ndim}. "
+                                       f"Expected 2D (pixels, frames) or 3D (pixels, frames, trials).")
+        
+        if len(baseline_data) == 0:
+            raise ValueError("No baseline data collected. Check dataset structure and frame indices.")
         
         # Convert to tensor and stack
-        baseline_tensor = torch.from_numpy(np.stack(baseline_data))  # Shape: (N, H, W)
-        baseline_tensor = baseline_tensor.unsqueeze(0).unsqueeze(1)  # Shape: (1, 1, N, H, W)
-        baseline_tensor = baseline_tensor.permute(0, 1, 3, 4, 2).squeeze(-1)  # Shape: (1, 1, H, W)
-        
-        # Compute statistics across all trials for each pixel
-        # We need to compute stats across the trial dimension
         all_baseline_frames = torch.stack([torch.from_numpy(frame) for frame in baseline_data])  # (N, H, W)
         
         # Compute mean and std for each pixel across all trials
+        # If only one trial, mean/std will be computed from that single frame
         mean_baseline = all_baseline_frames.mean(dim=0)  # (H, W)
         std_baseline = all_baseline_frames.std(dim=0)    # (H, W)
         
@@ -226,15 +261,28 @@ class BaselineRobustNormalizer(Normalizer):
         baseline_data = []
         
         with h5py.File(hdf5_path, 'r') as f:
-            for group_name in f.keys():
+            # Handle case where there are no groups (direct datasets)
+            groups = list(f.keys())
+            if len(groups) == 0:
+                raise ValueError("HDF5 file contains no groups or datasets")
+            
+            for group_name in groups:
                 group = f[group_name]
-                for dataset_name in group.keys():
+                datasets = list(group.keys())
+                
+                # Handle case where there are no datasets in the group
+                if len(datasets) == 0:
+                    continue
+                
+                for dataset_name in datasets:
                     dataset = group[dataset_name]
-                    num_trials = dataset.shape[-1]
+                    dataset_shape = dataset.shape
+                    dataset_ndim = len(dataset_shape)
                     
-                    for trial_idx in range(num_trials):
-                        # Get trial data: shape (pixels, frames, trials)
-                        trial_data = dataset[:, :, trial_idx]
+                    # Handle 2D dataset (pixels, frames) - single trial case
+                    if dataset_ndim == 2:
+                        # Shape: (pixels, frames)
+                        trial_data = dataset[:, :]
                         
                         # Slice the specified frame range
                         trial_sliced = trial_data[:, frame_start:frame_end + 1]
@@ -247,11 +295,39 @@ class BaselineRobustNormalizer(Normalizer):
                         height, width = 100, 100
                         baseline_frame_reshaped = baseline_frame_data.reshape(height, width)
                         baseline_data.append(baseline_frame_reshaped)
+                    
+                    # Handle 3D dataset (pixels, frames, trials) - multiple trials case
+                    elif dataset_ndim == 3:
+                        # Shape: (pixels, frames, trials)
+                        num_trials = dataset_shape[-1]
+                        
+                        for trial_idx in range(num_trials):
+                            # Get trial data: shape (pixels, frames, trials)
+                            trial_data = dataset[:, :, trial_idx]
+                            
+                            # Slice the specified frame range
+                            trial_sliced = trial_data[:, frame_start:frame_end + 1]
+                            
+                            # Get baseline frame (frame 20 by default, or closest available)
+                            baseline_frame_idx = min(self.baseline_frame, trial_sliced.shape[1] - 1)
+                            baseline_frame_data = trial_sliced[:, baseline_frame_idx]
+                            
+                            # Reshape to (height, width) and add to collection
+                            height, width = 100, 100
+                            baseline_frame_reshaped = baseline_frame_data.reshape(height, width)
+                            baseline_data.append(baseline_frame_reshaped)
+                    else:
+                        raise ValueError(f"Unsupported dataset dimensionality: {dataset_ndim}. "
+                                       f"Expected 2D (pixels, frames) or 3D (pixels, frames, trials).")
+        
+        if len(baseline_data) == 0:
+            raise ValueError("No baseline data collected. Check dataset structure and frame indices.")
         
         # Convert to tensor and stack
         all_baseline_frames = torch.stack([torch.from_numpy(frame) for frame in baseline_data])  # (N, H, W)
         
         # Compute robust statistics for each pixel across all trials
+        # If only one trial, median/IQR will be computed from that single frame
         median_baseline = torch.median(all_baseline_frames, dim=0)[0]  # (H, W)
         
         # Compute IQR (Interquartile Range)

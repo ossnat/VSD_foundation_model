@@ -87,7 +87,11 @@ class VsdVideoDataset(Dataset):
         # Build data structure
         # If windowing is enabled (window_size > 0), store (group, dataset, trial_idx, window_idx)
         # Otherwise store (group, dataset, trial_idx, None)
-        self.data_structure: list[Tuple[str, str, int, Optional[int]]] = []
+        # For 2D datasets, trial_idx will be None
+        self.data_structure: list[Tuple[str, str, Optional[int], Optional[int]]] = []
+        
+        # Store dataset dimensionality: (group_name, dataset_name) -> is_2d (bool)
+        self.dataset_is_2d: Dict[Tuple[str, str], bool] = {}
 
         # Preselect (group, dataset, trial_idx) if using global ids
         selected_triples = None
@@ -100,35 +104,69 @@ class VsdVideoDataset(Dataset):
                 group = f[group_name]
                 for dataset_name in group.keys():
                     dataset = group[dataset_name]
-                    num_trials = dataset.shape[-1]
-                    total_frames = dataset.shape[1]
+                    dataset_shape = dataset.shape
+                    dataset_ndim = len(dataset_shape)
                     
-                    start = max(0, self.frame_start)
-                    end = (self.frame_end if self.frame_end is not None else total_frames - 1)
-                    end = min(end, total_frames - 1)
-                    if end < start:
-                        start, end = 0, total_frames - 1
-                    effective_frames = end - start + 1
+                    # Check if dataset is 2D (pixels, frames) or 3D (pixels, frames, trials)
+                    is_2d = (dataset_ndim == 2)
+                    self.dataset_is_2d[(group_name, dataset_name)] = is_2d
                     
-                    # Filter trials
-                    if selected_triples is not None:
-                        trials_to_process = [t for t in range(num_trials)
-                                             if (group_name, dataset_name, t) in selected_triples]
-                    else:
-                        trials_to_process = range(num_trials)
-                        if self.trial_indices is not None:
-                            trials_to_process = [t for t in range(num_trials) if t in self.trial_indices]
-                    
-                    for trial_index in trials_to_process:
+                    if is_2d:
+                        # 2D dataset: shape (pixels, frames) - single trial
+                        total_frames = dataset_shape[1]
+                        
+                        start = max(0, self.frame_start)
+                        end = (self.frame_end if self.frame_end is not None else total_frames - 1)
+                        end = min(end, total_frames - 1)
+                        if end < start:
+                            start, end = 0, total_frames - 1
+                        effective_frames = end - start + 1
+                        
+                        # For 2D datasets, use trial_index=None
                         if self.clip_length > 0 and self.clip_length <= effective_frames:
                             # Non-overlapping clips
                             num_clips = effective_frames // self.clip_length
                             for clip_idx in range(num_clips):
                                 clip_start_frame = start + (clip_idx * self.clip_length)
-                                self.data_structure.append((group_name, dataset_name, trial_index, clip_start_frame))
+                                self.data_structure.append((group_name, dataset_name, None, clip_start_frame))
                         else:
                             # Single clip for entire range
-                            self.data_structure.append((group_name, dataset_name, trial_index, start))
+                            self.data_structure.append((group_name, dataset_name, None, start))
+                    else:
+                        # 3D dataset: shape (pixels, frames, trials) - multiple trials
+                        if dataset_ndim != 3:
+                            raise ValueError(f"Unsupported dataset dimensionality: {dataset_ndim}. "
+                                           f"Expected 2D (pixels, frames) or 3D (pixels, frames, trials).")
+                        
+                        num_trials = dataset_shape[-1]
+                        total_frames = dataset_shape[1]
+                        
+                        start = max(0, self.frame_start)
+                        end = (self.frame_end if self.frame_end is not None else total_frames - 1)
+                        end = min(end, total_frames - 1)
+                        if end < start:
+                            start, end = 0, total_frames - 1
+                        effective_frames = end - start + 1
+                        
+                        # Filter trials
+                        if selected_triples is not None:
+                            trials_to_process = [t for t in range(num_trials)
+                                                 if (group_name, dataset_name, t) in selected_triples]
+                        else:
+                            trials_to_process = range(num_trials)
+                            if self.trial_indices is not None:
+                                trials_to_process = [t for t in range(num_trials) if t in self.trial_indices]
+                        
+                        for trial_index in trials_to_process:
+                            if self.clip_length > 0 and self.clip_length <= effective_frames:
+                                # Non-overlapping clips
+                                num_clips = effective_frames // self.clip_length
+                                for clip_idx in range(num_clips):
+                                    clip_start_frame = start + (clip_idx * self.clip_length)
+                                    self.data_structure.append((group_name, dataset_name, trial_index, clip_start_frame))
+                            else:
+                                # Single clip for entire range
+                                self.data_structure.append((group_name, dataset_name, trial_index, start))
 
         self.total_samples = len(self.data_structure)
         
@@ -169,7 +207,17 @@ class VsdVideoDataset(Dataset):
 
         with h5py.File(self.hdf5_path, 'r') as f:
             dataset = f[group_name][dataset_name]
-            trial_data = dataset[:, :, trial_index]
+            is_2d = self.dataset_is_2d.get((group_name, dataset_name), False)
+            
+            # Handle 2D dataset (single trial) or 3D dataset (multiple trials)
+            if is_2d:
+                # 2D dataset: shape (pixels, frames) - no trial dimension
+                trial_data = dataset[:, :]
+            else:
+                # 3D dataset: shape (pixels, frames, trials)
+                if trial_index is None:
+                    raise ValueError(f"Trial index is None for 3D dataset {group_name}/{dataset_name}")
+                trial_data = dataset[:, :, trial_index]
             
             total_frames = trial_data.shape[1]
             start = max(0, self.frame_start)
