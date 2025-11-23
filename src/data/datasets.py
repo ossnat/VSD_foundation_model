@@ -99,6 +99,16 @@ class VsdVideoDataset(Dataset):
         if self.index_entries is not None and self.trial_indices is not None:
             selected_triples = set(self.index_entries[g] for g in self.trial_indices)
 
+        # Compute frame range once before opening HDF5 file
+        # Set total_frames to fixed value of 256
+        total_frames = 256
+        start = max(0, self.frame_start)
+        end = (self.frame_end if self.frame_end is not None else total_frames - 1)
+        end = min(end, total_frames - 1)
+        if end < start:
+            start, end = 0, total_frames - 1
+        effective_frames = end - start + 1
+
         with h5py.File(self.hdf5_path, 'r') as f:
             for group_name in f.keys():
                 group = f[group_name]
@@ -113,14 +123,7 @@ class VsdVideoDataset(Dataset):
                     
                     if is_2d:
                         # 2D dataset: shape (pixels, frames) - single trial
-                        total_frames = dataset_shape[1]
-                        
-                        start = max(0, self.frame_start)
-                        end = (self.frame_end if self.frame_end is not None else total_frames - 1)
-                        end = min(end, total_frames - 1)
-                        if end < start:
-                            start, end = 0, total_frames - 1
-                        effective_frames = end - start + 1
+                        # Frame range already computed before opening HDF5 file
                         
                         # For 2D datasets, use trial_index=None
                         if self.clip_length > 0 and self.clip_length <= effective_frames:
@@ -139,14 +142,7 @@ class VsdVideoDataset(Dataset):
                                            f"Expected 2D (pixels, frames) or 3D (pixels, frames, trials).")
                         
                         num_trials = dataset_shape[-1]
-                        total_frames = dataset_shape[1]
-                        
-                        start = max(0, self.frame_start)
-                        end = (self.frame_end if self.frame_end is not None else total_frames - 1)
-                        end = min(end, total_frames - 1)
-                        if end < start:
-                            start, end = 0, total_frames - 1
-                        effective_frames = end - start + 1
+                        # Frame range already computed before opening HDF5 file
                         
                         # Filter trials
                         if selected_triples is not None:
