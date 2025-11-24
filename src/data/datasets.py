@@ -115,6 +115,12 @@ class VsdVideoDataset(Dataset):
         else:
             num_clips = None  # Indicates single clip for entire range
 
+        # Preselect (group, dataset, trial_idx) if using global ids
+        selected_triples = None
+        # If index_entries is provided, interpret trial_indices as GLOBAL ids
+        if self.index_entries is not None and self.trial_indices is not None:
+            selected_triples = set(self.index_entries[g] for g in self.trial_indices)
+
         with h5py.File(self.hdf5_path, 'r') as f:
             for group_name in f.keys():
                 group = f[group_name]
@@ -136,6 +142,22 @@ class VsdVideoDataset(Dataset):
                             clip_entries = [(group_name, dataset_name, None, start + (clip_idx * self.clip_length))
                                            for clip_idx in range(num_clips)]
                             self.data_structure.extend(clip_entries)
+                    # Filter trials
+                    if selected_triples is not None:
+                        trials_to_process = [t for t in range(num_trials)
+                                             if (group_name, dataset_name, t) in selected_triples]
+                    else:
+                        trials_to_process = range(num_trials)
+                        if self.trial_indices is not None:
+                            trials_to_process = [t for t in range(num_trials) if t in self.trial_indices]
+                    
+                    for trial_index in trials_to_process:
+                        if self.clip_length > 0 and self.clip_length <= effective_frames:
+                            # Non-overlapping clips
+                            num_clips = effective_frames // self.clip_length
+                            for clip_idx in range(num_clips):
+                                clip_start_frame = start + (clip_idx * self.clip_length)
+                                self.data_structure.append((group_name, dataset_name, trial_index, clip_start_frame))
                         else:
                             # Single clip for entire range
                             self.data_structure.append((group_name, dataset_name, None, start))
