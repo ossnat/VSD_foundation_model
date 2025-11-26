@@ -142,25 +142,6 @@ class VsdVideoDataset(Dataset):
                             clip_entries = [(group_name, dataset_name, None, start + (clip_idx * self.clip_length))
                                            for clip_idx in range(num_clips)]
                             self.data_structure.extend(clip_entries)
-                    # Filter trials
-                    if selected_triples is not None:
-                        trials_to_process = [t for t in range(num_trials)
-                                             if (group_name, dataset_name, t) in selected_triples]
-                    else:
-                        trials_to_process = range(num_trials)
-                        if self.trial_indices is not None:
-                            trials_to_process = [t for t in range(num_trials) if t in self.trial_indices]
-                    
-                    for trial_index in trials_to_process:
-                        if self.clip_length > 0 and self.clip_length <= effective_frames:
-                            # Non-overlapping clips
-                            num_clips = effective_frames // self.clip_length
-                            for clip_idx in range(num_clips):
-                                clip_start_frame = start + (clip_idx * self.clip_length)
-                                self.data_structure.append((group_name, dataset_name, trial_index, clip_start_frame))
-                        else:
-                            # Single clip for entire range
-                            self.data_structure.append((group_name, dataset_name, None, start))
                     else:
                         # 3D dataset: shape (pixels, frames, trials) - multiple trials
                         if dataset_ndim != 3:
