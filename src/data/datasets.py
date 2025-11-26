@@ -83,6 +83,7 @@ class VsdVideoDataset(Dataset):
         self.clip_length = int(clip_length) if clip_length is not None else 1
         self.trial_indices = trial_indices
         self.index_entries = index_entries
+        self.total_frames = 256  # Fixed total frames value
         
         # Build data structure
         # If windowing is enabled (window_size > 0), store (group, dataset, trial_idx, window_idx)
@@ -100,13 +101,11 @@ class VsdVideoDataset(Dataset):
             selected_triples = set(self.index_entries[g] for g in self.trial_indices)
 
         # Compute frame range once before opening HDF5 file
-        # Set total_frames to fixed value of 256
-        total_frames = 256
         start = max(0, self.frame_start)
-        end = (self.frame_end if self.frame_end is not None else total_frames - 1)
-        end = min(end, total_frames - 1)
+        end = (self.frame_end if self.frame_end is not None else self.total_frames - 1)
+        end = min(end, self.total_frames - 1)
         if end < start:
-            start, end = 0, total_frames - 1
+            start, end = 0, self.total_frames - 1
         effective_frames = end - start + 1
         
         # Pre-compute num_clips if clip_length is valid
@@ -121,7 +120,8 @@ class VsdVideoDataset(Dataset):
         if self.index_entries is not None and self.trial_indices is not None:
             selected_triples = set(self.index_entries[g] for g in self.trial_indices)
 
-        with h5py.File(self.hdf5_path, 'r') as f:
+        # Limit h5py chunk cache to reduce memory usage (4MB total cache)
+        with h5py.File(self.hdf5_path, 'r', rdcc_nbytes=4*1024*1024) as f:
             for group_name in f.keys():
                 group = f[group_name]
                 for dataset_name in group.keys():
@@ -206,36 +206,40 @@ class VsdVideoDataset(Dataset):
     def __getitem__(self, idx: int):
         group_name, dataset_name, trial_index, clip_start = self.data_structure[idx]
 
-        with h5py.File(self.hdf5_path, 'r') as f:
+        # Limit h5py chunk cache to reduce memory usage (4MB total cache)
+        with h5py.File(self.hdf5_path, 'r', rdcc_nbytes=4*1024*1024) as f:
             dataset = f[group_name][dataset_name]
             is_2d = self.dataset_is_2d.get((group_name, dataset_name), False)
             
-            # Handle 2D dataset (single trial) or 3D dataset (multiple trials)
-            if is_2d:
-                # 2D dataset: shape (pixels, frames) - no trial dimension
-                trial_data = dataset[:, :]
-            else:
-                # 3D dataset: shape (pixels, frames, trials)
-                if trial_index is None:
-                    raise ValueError(f"Trial index is None for 3D dataset {group_name}/{dataset_name}")
-                trial_data = dataset[:, :, trial_index]
-            
-            total_frames = trial_data.shape[1]
+            # Calculate exact frame range needed (read only what we need, not entire trial)
             start = max(0, self.frame_start)
-            end = (self.frame_end if self.frame_end is not None else total_frames - 1)
-            end = min(end, total_frames - 1)
+            end = (self.frame_end if self.frame_end is not None else self.total_frames - 1)
+            end = min(end, self.total_frames - 1)
             if end < start:
-                start, end = 0, total_frames - 1
+                start, end = 0, self.total_frames - 1
             
+            # Determine the exact frame range to read
             if self.clip_length > 0 and (clip_start + self.clip_length <= end + 1):
-                data_slice = trial_data[:, clip_start:clip_start + self.clip_length]
+                frame_start_idx = clip_start
+                frame_end_idx = clip_start + self.clip_length
                 abs_start_frame = clip_start
                 abs_end_frame = clip_start + self.clip_length - 1
             else:
                 # Return full available frames if clip would exceed end
-                data_slice = trial_data[:, start:end + 1]
+                frame_start_idx = start
+                frame_end_idx = end + 1
                 abs_start_frame = start
                 abs_end_frame = end
+            
+            # Read ONLY the frames we need, not the entire trial
+            if is_2d:
+                # 2D dataset: shape (pixels, frames) - read only needed frame range
+                data_slice = dataset[:, frame_start_idx:frame_end_idx]
+            else:
+                # 3D dataset: shape (pixels, frames, trials) - read only needed frame range
+                if trial_index is None:
+                    raise ValueError(f"Trial index is None for 3D dataset {group_name}/{dataset_name}")
+                data_slice = dataset[:, frame_start_idx:frame_end_idx, trial_index]
         
         # Reshape and permute as before (height=100, width=100)
         height, width = 100, 100
