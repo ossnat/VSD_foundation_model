@@ -127,5 +127,3 @@ def index_trials(hdf5_path: str) -> List[Tuple[str, str, int]]:
                     entries.append((group_name, dataset_name, t))
     return entries
 
-
-# Removed split_data_global; global split is now provided by split_data

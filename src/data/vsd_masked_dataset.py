@@ -17,7 +17,18 @@ class VsdMaskedDataset(VsdVideoDataset):
         """
         super().__init__(*args, **kwargs)
         self.mask_ratio = mask_ratio
-        self.patch_size = patch_size  # (T, H, W)
+        
+        # Adjust temporal patch size based on clip_length
+        # For 2D images (clip_length=1), set temporal patch size to 1
+        pT, pH, pW = patch_size
+        if self.clip_length == 1:
+            # For single frames, temporal patch size should be 1
+            pT = 1
+        elif self.clip_length < pT:
+            # If clip_length is smaller than requested temporal patch size, use clip_length
+            pT = self.clip_length
+        
+        self.patch_size = (pT, pH, pW)  # (T, H, W)
     
     def __getitem__(self, idx):
         sample = super().__getitem__(idx)
@@ -55,6 +66,18 @@ class VsdMaskedDataset(VsdVideoDataset):
         nPT = T // pT
         nPH = H // pH
         nPW = W // pW
+        
+        # Ensure we have at least 1 patch in each dimension
+        # Adjust patch sizes if needed to ensure at least one patch
+        if nPT == 0:
+            nPT = 1
+            pT = T
+        if nPH == 0:
+            nPH = 1
+            pH = H
+        if nPW == 0:
+            nPW = 1
+            pW = W
         
         # Trim video to full patches only (if needed)
         video_trimmed = video[: nPT * pT, : nPH * pH, : nPW * pW]
