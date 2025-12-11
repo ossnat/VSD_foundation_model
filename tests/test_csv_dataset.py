@@ -88,8 +88,7 @@ def create_mock_data(main_data_dir: Path):
     df.to_csv(csv_path, sep='\t', index=False)
     print(f"  Created {csv_path} with {len(df)} trials")
     
-    # Create stats JSON
-    # Compute actual stats from the data
+    # Compute actual stats from the data (train split only)
     all_data = []
     for h5_path, dataset_name in h5_files[:3]:  # Only train split
         with h5py.File(h5_path, 'r') as f:
@@ -97,8 +96,30 @@ def create_mock_data(main_data_dir: Path):
             all_data.append(data)
     
     all_data = np.concatenate(all_data, axis=1)  # Concatenate along frames
-    mean_val = float(np.mean(all_data))
-    std_val = float(np.std(all_data))
+    
+    # Compute mean and std as spatial arrays (100x100)
+    height, width = 100, 100
+    # Reshape to (n_pixels, n_frames) -> (height, width, n_frames) -> compute stats per pixel
+    reshaped = all_data.reshape(height, width, -1)
+    mean_array = np.mean(reshaped, axis=2, keepdims=True)  # (100, 100, 1)
+    std_array = np.std(reshaped, axis=2, keepdims=True)    # (100, 100, 1)
+    
+    # Reshape to (1, 1, 100, 100) for H5 storage
+    mean_array = mean_array.reshape(1, 1, height, width)
+    std_array = std_array.reshape(1, 1, height, width)
+    
+    # Create H5 file with mean and std
+    stats_h5_path = splits_dir / "baseline_stats_v1_seed17_strat_monkey.h5"
+    with h5py.File(stats_h5_path, 'w') as f:
+        f.create_dataset('mean', data=mean_array.astype(np.float32))
+        f.create_dataset('std', data=std_array.astype(np.float32))
+    print(f"  Created {stats_h5_path} with mean and std datasets")
+    
+    # Create stats JSON with path to H5 file
+    mean_min = float(np.min(mean_array))
+    mean_max = float(np.max(mean_array))
+    std_min = float(np.min(std_array))
+    std_max = float(np.max(std_array))
     
     stats_json = {
         "created": "2025-01-01T00:00:00.000000",
@@ -108,19 +129,23 @@ def create_mock_data(main_data_dir: Path):
         "val_frac": 0.15,
         "test_frac": 0.15,
         "stratify_level": "monkey",
-        "stats": {
-            "mean": mean_val,
-            "std": std_val,
-            "n_values": int(np.prod(all_data.shape)),
-            "n_trials_used": 3,
-            "subsample_frac": 1.0
-        }
+        "baseline_frame": 20,
+        "n_train_trials": 3,
+        "mean_shape": [1, 1, 100, 100],
+        "stats_h5_path": str(stats_h5_path),
+        "split_csv_path": str(csv_path),
+        "mean_min": mean_min,
+        "mean_max": mean_max,
+        "std_min": std_min,
+        "std_max": std_max
     }
     
     json_path = splits_dir / "stats_v1_seed17_strat_monkey.json"
     with open(json_path, 'w') as f:
         json.dump(stats_json, f, indent=2)
-    print(f"  Created {json_path} with mean={mean_val:.4f}, std={std_val:.4f}")
+    print(f"  Created {json_path} with stats_h5_path pointing to H5 file")
+    print(f"    Mean range: [{mean_min:.4f}, {mean_max:.4f}]")
+    print(f"    Std range: [{std_min:.4f}, {std_max:.4f}]")
     
     return csv_path, json_path, main_data_dir
 

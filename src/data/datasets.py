@@ -133,52 +133,82 @@ class VsdVideoDataset(Dataset):
         with open(stats_json_path, 'r') as f:
             stats_data = json.load(f)
         
-        # Extract mean and std from stats
-        stats = stats_data.get('stats', {})
-        mean_val = stats.get('mean')
-        std_val = stats.get('std')
+        # Get path to H5 file containing mean and std
+        stats_h5_path = stats_data.get('stats_h5_path')
+        if stats_h5_path is None:
+            raise ValueError(f"Stats JSON must contain 'stats_h5_path' pointing to H5 file with mean and std")
         
-        # Handle NaN values (which might be stored as strings or actual NaN)
-        if mean_val is None or std_val is None:
-            raise ValueError(f"Stats JSON must contain 'mean' and 'std' values")
+        # Handle relative paths if processed_root is provided
+        if self.processed_root is not None and not Path(stats_h5_path).is_absolute():
+            stats_h5_path = str(Path(self.processed_root) / stats_h5_path)
         
-        # Check for NaN (could be float('nan'), string 'NaN', or None)
-        if (isinstance(mean_val, float) and math.isnan(mean_val)) or \
-           (isinstance(mean_val, str) and mean_val.lower() == 'nan') or \
-           (isinstance(std_val, float) and math.isnan(std_val)) or \
-           (isinstance(std_val, str) and std_val.lower() == 'nan'):
-            raise ValueError(f"Stats JSON contains NaN values. Statistics must be computed before using the dataset. "
-                           f"Please ensure the stats JSON has valid numeric 'mean' and 'std' values.")
+        # Load mean and std from H5 file
+        print(f"Loading mean and std from {stats_h5_path}...")
+        with h5py.File(stats_h5_path, 'r') as f:
+            # Check for mean and std datasets
+            if 'mean' not in f:
+                raise ValueError(f"H5 file {stats_h5_path} must contain 'mean' dataset")
+            if 'std' not in f:
+                raise ValueError(f"H5 file {stats_h5_path} must contain 'std' dataset")
+            
+            # Load mean and std arrays
+            mean_array = f['mean'][...]  # Shape should be (1, 1, H, W) or similar
+            std_array = f['std'][...]    # Shape should be (1, 1, H, W) or similar
         
-        # Convert to tensors with shape (1, 1, H, W) to match normalization format
-        # Assuming 100x100 spatial dimensions
-        height, width = 100, 100
-        # Handle scalar mean/std values - broadcast to full spatial dimensions
-        if isinstance(mean_val, (int, float)):
-            # Scalar value - create tensor and broadcast
-            self.mean = torch.full((1, 1, height, width), mean_val, dtype=torch.float32)
-        else:
-            # Array value - reshape if needed
-            mean_tensor = torch.tensor(mean_val, dtype=torch.float32)
-            if mean_tensor.numel() == 1:
-                self.mean = torch.full((1, 1, height, width), float(mean_tensor.item()), dtype=torch.float32)
+        # Convert to tensors
+        mean_tensor = torch.from_numpy(mean_array).float()
+        std_tensor = torch.from_numpy(std_array).float()
+        
+        # Validate that mean and std are arrays, not scalars
+        if mean_tensor.ndim == 0 or mean_tensor.numel() == 1:
+            raise ValueError(f"Mean must be a spatial array, not a scalar. Got shape: {mean_array.shape}. "
+                           f"Expected shape like (1, 1, 100, 100) or (100, 100).")
+        if std_tensor.ndim == 0 or std_tensor.numel() == 1:
+            raise ValueError(f"Std must be a spatial array, not a scalar. Got shape: {std_array.shape}. "
+                           f"Expected shape like (1, 1, 100, 100) or (100, 100).")
+        
+        # Get expected shape from JSON if available, otherwise infer
+        mean_shape = stats_data.get('mean_shape', [1, 1, 100, 100])
+        expected_height = mean_shape[2] if len(mean_shape) >= 3 else 100
+        expected_width = mean_shape[3] if len(mean_shape) >= 4 else 100
+        
+        # Reshape to (1, 1, H, W) if needed
+        if mean_tensor.ndim == 2:
+            # If 2D (H, W), add channel and temporal dimensions
+            self.mean = mean_tensor.unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)
+        elif mean_tensor.ndim == 4:
+            # If already 4D, ensure it's (1, 1, H, W)
+            if mean_tensor.shape != (1, 1, expected_height, expected_width):
+                self.mean = mean_tensor.reshape(1, 1, expected_height, expected_width)
             else:
-                self.mean = mean_tensor.reshape(1, 1, height, width)
-        
-        if isinstance(std_val, (int, float)):
-            # Scalar value - create tensor and broadcast
-            self.std = torch.full((1, 1, height, width), std_val, dtype=torch.float32)
+                self.mean = mean_tensor
         else:
-            # Array value - reshape if needed
-            std_tensor = torch.tensor(std_val, dtype=torch.float32)
-            if std_tensor.numel() == 1:
-                self.std = torch.full((1, 1, height, width), float(std_tensor.item()), dtype=torch.float32)
+            # Reshape to target shape
+            self.mean = mean_tensor.reshape(1, 1, expected_height, expected_width)
+        
+        if std_tensor.ndim == 2:
+            # If 2D (H, W), add channel and temporal dimensions
+            self.std = std_tensor.unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)
+        elif std_tensor.ndim == 4:
+            # If already 4D, ensure it's (1, 1, H, W)
+            if std_tensor.shape != (1, 1, expected_height, expected_width):
+                self.std = std_tensor.reshape(1, 1, expected_height, expected_width)
             else:
-                self.std = std_tensor.reshape(1, 1, height, width)
+                self.std = std_tensor
+        else:
+            # Reshape to target shape
+            self.std = std_tensor.reshape(1, 1, expected_height, expected_width)
         
         self.epsilon = 1e-8  # Small value to avoid division by zero
         
-        print(f"Loaded normalization stats: mean={mean_val:.4f}, std={std_val:.4f}")
+        # Print stats summary
+        mean_min = float(self.mean.min())
+        mean_max = float(self.mean.max())
+        std_min = float(self.std.min())
+        std_max = float(self.std.max())
+        print(f"Loaded normalization stats from H5 file:")
+        print(f"  Mean range: [{mean_min:.4f}, {mean_max:.4f}], shape: {self.mean.shape}")
+        print(f"  Std range: [{std_min:.4f}, {std_max:.4f}], shape: {self.std.shape}")
 
         # Build data structure: list of (row_index, clip_start_frame)
         self.data_structure: List[Tuple[int, int]] = []
