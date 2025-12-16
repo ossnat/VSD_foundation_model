@@ -1,7 +1,12 @@
 # Data
 dataset: vsd
+# Legacy HDF5 path
 vsd_hdf5_path: "G:/My Drive/HDF5_DATA_AFTER_PREPROCESSING2/vsd_video_data.hdf5"
 normalize: true
+# Split data
+split_csv_path: "G:/My Drive/Gonda_research_Hamutal_2024/Ossnat/VSD_FM/Data/ProcessedData/DataFromYarden/splits/split_v1_seed17_strat_monkey.csv"
+stats_json_path: "G:/My Drive/Gonda_research_Hamutal_2024/Ossnat/VSD_FM/Data/ProcessedData/DataFromYarden/splits/stats_v1_seed17_strat_monkey.json"
+processed_root: "G:/My Drive/Gonda_research_Hamutal_2024/Ossnat/VSD_FM/Data/ProcessedData/DataFromYarden/splits" 
 normalization_type: baseline_zscore
 baseline_frame: 20
 frame_start: 1
