@@ -108,17 +108,62 @@ class VsdVideoDataset(Dataset):
 
         # Load CSV and filter by split
         print(f"Loading split CSV from {split_csv_path}...")
-        # Try tab-separated first, then comma-separated
+        
+        # Try reading with standard settings first (most common case)
         try:
-            df = pd.read_csv(split_csv_path, sep='\t')
-        except Exception:
-            df = pd.read_csv(split_csv_path, sep=',')
+            df = pd.read_csv(split_csv_path, sep=',', encoding='utf-8-sig', skipinitialspace=True)
+            print(f"Successfully read CSV with standard settings")
+        except Exception as e1:
+            print(f"Standard read failed: {e1}, trying alternatives...")
+            # Try different encodings
+            df = None
+            last_error = e1
+            for encoding in ['utf-8', 'latin-1', 'cp1252']:
+                try:
+                    df = pd.read_csv(split_csv_path, sep=',', encoding=encoding, skipinitialspace=True)
+                    print(f"Successfully read CSV with encoding='{encoding}'")
+                    break
+                except Exception as e:
+                    last_error = e
+                    continue
+            
+            if df is None:
+                # Last resort: try with python engine
+                try:
+                    df = pd.read_csv(split_csv_path, sep=',', encoding='utf-8-sig', engine='python', 
+                                   skipinitialspace=True, on_bad_lines='skip')
+                    print(f"Successfully read CSV with engine='python'")
+                except Exception as e:
+                    raise ValueError(f"Failed to read CSV file {split_csv_path}. Last error: {e}")
+        
+        # Strip whitespace from column names
+        df.columns = df.columns.str.strip()
+        
+        # Debug: print what columns were found
+        print(f"Found CSV columns ({len(df.columns)} total): {list(df.columns)}")
+        print(f"CSV shape: {df.shape} (rows x columns)")
+        
+        # Check if we have the required columns
+        required_columns = ['target_file', 'trial_dataset', 'shape', 'split']
+        found_required = [col for col in required_columns if col in df.columns]
+        print(f"Required columns found: {found_required} out of {required_columns}")
+        
+        if len(df) > 0:
+            print(f"Sample first row (showing required columns):")
+            for col in required_columns:
+                if col in df.columns:
+                    val = df.iloc[0][col]
+                    # Truncate long values for display
+                    if isinstance(val, str) and len(val) > 80:
+                        val = val[:80] + "..."
+                    print(f"  {col}: {val}")
         
         # Validate required columns
         required_columns = ['target_file', 'trial_dataset', 'shape', 'split']
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
-            raise ValueError(f"CSV file must contain columns: {required_columns}. Missing: {missing_columns}")
+            raise ValueError(f"CSV file must contain columns: {required_columns}. Missing: {missing_columns}. "
+                           f"Found columns: {list(df.columns)}")
         
         # Filter by split
         self.trials = df[df['split'] == split_name].copy().reset_index(drop=True)
