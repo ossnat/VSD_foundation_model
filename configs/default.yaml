@@ -6,7 +6,7 @@ normalize: true
 # Split data
 # /content/drive/My Drive/  G:/My Drive/
 split_csv_path: "/content/drive/My Drive/Gonda_research_Hamutal_2024/Ossnat/VSD_FM/Data/ProcessedData/DataFromYarden/splits/split_v1_seed17_strat_monkey.csv"
-stats_json_path: "/content/drive/My Drive/Gonda_research_Hamutal_2024/Ossnat/VSD_FM/Data/ProcessedData/DataFromYarden/splits/stats_v1_seed17_strat_monkey.json"
+stats_json_path: "/content/drive/My Drive/Gonda_research_Hamutal_2024/Ossnat/VSD_FM/Data/ProcessedData/DataFromYarden/splits/baseline_stats_v1_seed17_strat_monkey.json"
 processed_root: "/content/drive/My Drive/Gonda_research_Hamutal_2024/Ossnat/VSD_FM/Data/ProcessedData/DataFromYarden/splits" 
 normalization_type: baseline_zscore
 baseline_frame: 20
