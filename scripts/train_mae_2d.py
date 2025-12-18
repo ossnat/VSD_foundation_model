@@ -26,7 +26,22 @@ from tqdm import tqdm
 import argparse
 
 # Add project root to path
-project_root = Path(__file__).parent.parent
+# Handle both script execution and Colab notebook execution
+try:
+    # When running as a script
+    project_root = Path(__file__).parent.parent
+except NameError:
+    # When running in Colab/notebook, __file__ is not defined
+    import os
+    cwd = Path(os.getcwd())
+    if (cwd / "configs").exists():
+        project_root = cwd
+    elif (cwd.parent / "configs").exists():
+        project_root = cwd.parent
+    else:
+        project_root = cwd
+        print(f"Warning: Could not determine project root, using: {project_root}")
+
 sys.path.insert(0, str(project_root))
 
 from src.data import load_dataset
@@ -455,32 +470,41 @@ def save_checkpoint(model, optimizer, epoch, loss, save_dir, is_best=False):
         print(f"  Saved best model to {best_path}")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Train MAE 2D model")
-    parser.add_argument("--config", type=str, default="configs/default.yaml",
-                       help="Path to config file")
-    parser.add_argument("--epochs", type=int, default=None,
-                       help="Number of epochs (overrides config)")
-    parser.add_argument("--save-dir", type=str, default="checkpoints",
-                       help="Directory to save checkpoints")
-    parser.add_argument("--log-dir", type=str, default="logs",
-                       help="Directory for TensorBoard logs")
-    parser.add_argument("--vis-dir", type=str, default="visualizations",
-                       help="Directory to save visualizations")
+def train_mae_2d_from_config(config_path=None, cfg=None, epochs=None, 
+                             save_dir="checkpoints", log_dir="logs", vis_dir="visualizations"):
+    """
+    Train MAE 2D model from configuration.
     
-    args = parser.parse_args()
+    This function can be called directly from Colab or other environments.
     
+    Args:
+        config_path: Path to config YAML file (if cfg is None)
+        cfg: Configuration dictionary (if provided, config_path is ignored)
+        epochs: Number of epochs (overrides config if provided)
+        save_dir: Directory to save checkpoints
+        log_dir: Directory for TensorBoard logs
+        vis_dir: Directory to save visualizations
+    
+    Returns:
+        Trained model
+    """
     print("="*60)
     print("MAE 2D Full Training Script")
     print("="*60)
     
-    # Load config
-    config_path = project_root / args.config
-    cfg = load_config(config_path)
+    # Load config if not provided
+    if cfg is None:
+        if config_path is None:
+            config_path = project_root / "configs" / "default.yaml"
+        else:
+            config_path = Path(config_path)
+            if not config_path.is_absolute():
+                config_path = project_root / config_path
+        cfg = load_config(config_path)
     
     # Override epochs if provided
-    if args.epochs is not None:
-        cfg["epochs"] = args.epochs
+    if epochs is not None:
+        cfg["epochs"] = epochs
     
     # Set seed and device
     set_seed(cfg.get("seed", 42))
@@ -511,19 +535,19 @@ def main():
     )
     
     # Create logger
-    logger = TBLogger(log_dir=args.log_dir)
+    logger = TBLogger(log_dir=log_dir)
     
     # Create trainer
     trainer = MAE2DTrainer(model, optimizer, device, logger)
     
     # Training loop
-    epochs = cfg.get("epochs", 10)
+    num_epochs = cfg.get("epochs", 10)
     best_val_loss = float('inf')
     
-    print(f"\nStarting training for {epochs} epochs...")
+    print(f"\nStarting training for {num_epochs} epochs...")
     print("="*60)
     
-    for epoch in range(epochs):
+    for epoch in range(num_epochs):
         # Train
         train_loss = trainer.train_epoch(train_loader, epoch)
         
@@ -531,7 +555,7 @@ def main():
         val_loss, val_metrics = trainer.validate(val_loader, epoch)
         
         # Print epoch summary
-        print(f"\nEpoch {epoch+1}/{epochs}")
+        print(f"\nEpoch {epoch+1}/{num_epochs}")
         print(f"  Train Loss: {train_loss:.4f}")
         print(f"  Val Loss: {val_loss:.4f}")
         if val_metrics:
@@ -543,7 +567,7 @@ def main():
         if is_best:
             best_val_loss = val_loss
         
-        save_checkpoint(model, optimizer, epoch, val_loss, args.save_dir, is_best=is_best)
+        save_checkpoint(model, optimizer, epoch, val_loss, save_dir, is_best=is_best)
         
         print("-"*60)
     
@@ -553,18 +577,46 @@ def main():
     
     # Visualize predictions
     print("\n" + "="*60)
-    visualize_predictions(model, test_loader, device, num_examples=5, save_dir=args.vis_dir)
+    visualize_predictions(model, test_loader, device, num_examples=5, save_dir=vis_dir)
     
     # Grad-CAM visualization
     print("\n" + "="*60)
-    visualize_gradcam(model, test_loader, device, num_examples=3, save_dir=args.vis_dir)
+    visualize_gradcam(model, test_loader, device, num_examples=3, save_dir=vis_dir)
     
     print("\n" + "="*60)
     print("Training completed!")
-    print(f"  Checkpoints saved to: {args.save_dir}")
-    print(f"  Visualizations saved to: {args.vis_dir}")
-    print(f"  TensorBoard logs: {args.log_dir}")
+    print(f"  Checkpoints saved to: {save_dir}")
+    print(f"  Visualizations saved to: {vis_dir}")
+    print(f"  TensorBoard logs: {log_dir}")
     print("="*60)
+    
+    return model
+
+
+def main():
+    """Main entry point for command-line usage."""
+    parser = argparse.ArgumentParser(description="Train MAE 2D model")
+    parser.add_argument("--config", type=str, default="configs/default.yaml",
+                       help="Path to config file")
+    parser.add_argument("--epochs", type=int, default=None,
+                       help="Number of epochs (overrides config)")
+    parser.add_argument("--save-dir", type=str, default="checkpoints",
+                       help="Directory to save checkpoints")
+    parser.add_argument("--log-dir", type=str, default="logs",
+                       help="Directory for TensorBoard logs")
+    parser.add_argument("--vis-dir", type=str, default="visualizations",
+                       help="Directory to save visualizations")
+    
+    args = parser.parse_args()
+    
+    # Call the main training function
+    train_mae_2d_from_config(
+        config_path=args.config,
+        epochs=args.epochs,
+        save_dir=args.save_dir,
+        log_dir=args.log_dir,
+        vis_dir=args.vis_dir
+    )
 
 
 if __name__ == "__main__":
