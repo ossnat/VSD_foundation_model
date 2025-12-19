@@ -25,6 +25,8 @@ class VsdVideoDataset(Dataset):
                  frame_start: int = 1,
                  frame_end: Optional[int] = None,
                  clip_length: int = 1,
+                 crop_frame: Optional[str] = None,  # None, "square", or "circle"
+                 crop_radius: Optional[float] = None,  # 10-50, where 50 = full width/height
                  # Legacy parameters for backward compatibility
                  hdf5_path: Optional[str] = None,
                  normalize: bool = False,
@@ -68,6 +70,8 @@ class VsdVideoDataset(Dataset):
             clip_length = cfg.get('clip_length', clip_length)
             if clip_length == 0:
                 clip_length = 1
+            crop_frame = cfg.get('crop_frame', crop_frame)
+            crop_radius = cfg.get('crop_radius', crop_radius)
             # Legacy parameters
             hdf5_path = cfg.get('hdf5_path', hdf5_path)
             normalize = cfg.get('normalize', normalize)
@@ -105,6 +109,17 @@ class VsdVideoDataset(Dataset):
         self.frame_start = frame_start
         self.frame_end = frame_end
         self.clip_length = int(clip_length) if clip_length is not None else 1
+        self.crop_frame = crop_frame
+        self.crop_radius = crop_radius
+        
+        # Validate crop parameters
+        if self.crop_frame is not None:
+            if self.crop_frame not in ['square', 'circle']:
+                raise ValueError(f"crop_frame must be None, 'square', or 'circle', got '{self.crop_frame}'")
+            if self.crop_radius is None:
+                raise ValueError("crop_radius must be provided when crop_frame is set")
+            if not (10 <= self.crop_radius <= 50):
+                raise ValueError(f"crop_radius must be between 10 and 50, got {self.crop_radius}")
 
         # Load CSV and filter by split
         print(f"Loading split CSV from {split_csv_path}...")
@@ -308,6 +323,23 @@ class VsdVideoDataset(Dataset):
         self.cache_dir = cache_dir
         self.normalization_kwargs = normalization_kwargs or {}
         self.clip_length = int(clip_length) if clip_length is not None else 1
+        
+        # Extract crop parameters from cfg if available
+        if cfg is not None:
+            self.crop_frame = cfg.get('crop_frame', None)
+            self.crop_radius = cfg.get('crop_radius', None)
+        else:
+            self.crop_frame = None
+            self.crop_radius = None
+        
+        # Validate crop parameters
+        if self.crop_frame is not None:
+            if self.crop_frame not in ['square', 'circle']:
+                raise ValueError(f"crop_frame must be None, 'square', or 'circle', got '{self.crop_frame}'")
+            if self.crop_radius is None:
+                raise ValueError("crop_radius must be provided when crop_frame is set")
+            if not (10 <= self.crop_radius <= 50):
+                raise ValueError(f"crop_radius must be between 10 and 50, got {self.crop_radius}")
         self.trial_indices = trial_indices
         self.index_entries = index_entries
         
@@ -464,12 +496,182 @@ class VsdVideoDataset(Dataset):
         # Convert to tensor and permute to (1, frames, height, width)
         tensor_data = torch.from_numpy(reshaped_data).unsqueeze(0).permute(0, 3, 1, 2).float()
         
-        # Apply z-score normalization using precomputed stats
-        tensor_data = (tensor_data - self.mean) / (self.std + self.epsilon)
+        # Store original dimensions for normalization stats cropping
+        orig_height, orig_width = height, width
         
-        mask_tensor = torch.zeros(1, frames, height, width, dtype=torch.float32)
+        # Track if we need to apply circular mask after normalization
+        apply_circle_mask_after = False
+        circle_mask = None
+        radius_pixels = None
+        
+        # Apply frame cropping if specified (this may change tensor size)
+        if self.crop_frame is not None:
+            if self.crop_frame == 'circle':
+                # For circle, we'll apply the mask after normalization
+                # First, crop to square bounding box
+                tensor_data, crop_height, crop_width = self._apply_crop(tensor_data, height, width)
+                # Store mask info for later
+                apply_circle_mask_after = True
+                radius_pixels = (self.crop_radius / 50.0) * (orig_width / 2.0)
+                # Create circular mask
+                crop_h, crop_w = crop_height, crop_width
+                center_y_crop, center_x_crop = crop_h // 2, crop_w // 2
+                y_coords, x_coords = torch.meshgrid(
+                    torch.arange(crop_h, device=tensor_data.device, dtype=torch.float32),
+                    torch.arange(crop_w, device=tensor_data.device, dtype=torch.float32),
+                    indexing='ij'
+                )
+                distances = torch.sqrt((x_coords - center_x_crop) ** 2 + (y_coords - center_y_crop) ** 2)
+                circle_mask = (distances <= radius_pixels).float().unsqueeze(0).unsqueeze(0)
+            else:
+                # For square, just crop normally
+                tensor_data, crop_height, crop_width = self._apply_crop(tensor_data, height, width)
+            # Update height/width for mask creation
+            height, width = crop_height, crop_width
+        else:
+            crop_height, crop_width = height, width
+        
+        # Crop normalization stats to match cropped tensor size
+        mean_cropped = self._crop_normalization_stats(self.mean, orig_height, orig_width, crop_height, crop_width)
+        std_cropped = self._crop_normalization_stats(self.std, orig_height, orig_width, crop_height, crop_width)
+        
+        # Apply z-score normalization using precomputed stats (cropped to match)
+        tensor_data = (tensor_data - mean_cropped) / (std_cropped + self.epsilon)
+        
+        # Apply circular mask after normalization (so corners stay at 0)
+        if apply_circle_mask_after:
+            tensor_data = tensor_data * circle_mask
+        
+        mask_tensor = torch.zeros(1, frames, crop_height, crop_width, dtype=torch.float32)
         
         return {"video": tensor_data, "mask": mask_tensor, "start_frame": int(abs_start_frame), "end_frame": int(abs_end_frame)}
+    
+    def _apply_crop(self, tensor_data: torch.Tensor, height: int, width: int):
+        """
+        Apply circular or square crop to the frame data.
+        For square crops, actually crops the tensor to smaller size.
+        For circular crops, uses square bounding box.
+        
+        Args:
+            tensor_data: Tensor of shape (1, frames, height, width)
+            height: Frame height
+            width: Frame width
+        
+        Returns:
+            tuple: (cropped_tensor, new_height, new_width)
+        """
+        if self.crop_frame is None:
+            return tensor_data, height, width
+        
+        # Calculate actual radius in pixels
+        # crop_radius 50 = full width/height (100 pixels)
+        radius_pixels = (self.crop_radius / 50.0) * (width / 2.0)
+        
+        # Calculate crop region (centered)
+        center_y, center_x = height // 2, width // 2
+        
+        if self.crop_frame == 'square':
+            # Square crop: actually crop the tensor to smaller size
+            crop_size = int(2 * radius_pixels)
+            # Ensure crop_size is even and within bounds
+            crop_size = min(crop_size, height, width)
+            if crop_size % 2 != 0:
+                crop_size -= 1
+            
+            # Calculate crop boundaries (centered)
+            y_start = center_y - crop_size // 2
+            y_end = y_start + crop_size
+            x_start = center_x - crop_size // 2
+            x_end = x_start + crop_size
+            
+            # Ensure boundaries are within tensor
+            y_start = max(0, y_start)
+            y_end = min(height, y_end)
+            x_start = max(0, x_start)
+            x_end = min(width, x_end)
+            
+            # Crop the tensor: (1, frames, height, width) -> (1, frames, crop_h, crop_w)
+            cropped = tensor_data[:, :, y_start:y_end, x_start:x_end]
+            new_height = y_end - y_start
+            new_width = x_end - x_start
+            
+            return cropped, new_height, new_width
+            
+        elif self.crop_frame == 'circle':
+            # For circle, use square bounding box (circumscribed square)
+            # This gives us a rectangular tensor while approximating the circle
+            crop_size = int(2 * radius_pixels)
+            crop_size = min(crop_size, height, width)
+            if crop_size % 2 != 0:
+                crop_size -= 1
+            
+            y_start = center_y - crop_size // 2
+            y_end = y_start + crop_size
+            x_start = center_x - crop_size // 2
+            x_end = x_start + crop_size
+            
+            y_start = max(0, y_start)
+            y_end = min(height, y_end)
+            x_start = max(0, x_start)
+            x_end = min(width, x_end)
+            
+            # Crop to square bounding box
+            cropped = tensor_data[:, :, y_start:y_end, x_start:x_end]
+            
+            # Apply circular mask to zero out corners
+            crop_h, crop_w = y_end - y_start, x_end - x_start
+            center_y_crop, center_x_crop = crop_h // 2, crop_w // 2
+            
+            y_coords, x_coords = torch.meshgrid(
+                torch.arange(crop_h, device=tensor_data.device, dtype=torch.float32),
+                torch.arange(crop_w, device=tensor_data.device, dtype=torch.float32),
+                indexing='ij'
+            )
+            
+            distances = torch.sqrt((x_coords - center_x_crop) ** 2 + (y_coords - center_y_crop) ** 2)
+            circle_mask = (distances <= radius_pixels).float().unsqueeze(0).unsqueeze(0)
+            
+            cropped = cropped * circle_mask
+            new_height = crop_h
+            new_width = crop_w
+            
+            return cropped, new_height, new_width
+        else:
+            raise ValueError(f"Unknown crop_frame type: {self.crop_frame}")
+    
+    def _crop_normalization_stats(self, stats_tensor: torch.Tensor, orig_h: int, orig_w: int, 
+                                   crop_h: int, crop_w: int) -> torch.Tensor:
+        """
+        Crop normalization statistics to match cropped tensor size.
+        
+        Args:
+            stats_tensor: Normalization stats tensor of shape (1, 1, orig_h, orig_w)
+            orig_h, orig_w: Original height and width
+            crop_h, crop_w: Cropped height and width
+        
+        Returns:
+            Cropped stats tensor of shape (1, 1, crop_h, crop_w)
+        """
+        if crop_h == orig_h and crop_w == orig_w:
+            return stats_tensor
+        
+        # Calculate crop region (centered, same as in _apply_crop)
+        center_y, center_x = orig_h // 2, orig_w // 2
+        y_start = center_y - crop_h // 2
+        y_end = y_start + crop_h
+        x_start = center_x - crop_w // 2
+        x_end = x_start + crop_w
+        
+        # Ensure boundaries are within tensor
+        y_start = max(0, y_start)
+        y_end = min(orig_h, y_end)
+        x_start = max(0, x_start)
+        x_end = min(orig_w, x_end)
+        
+        # Crop the stats tensor
+        cropped_stats = stats_tensor[:, :, y_start:y_end, x_start:x_end]
+        
+        return cropped_stats
     
     def _getitem_legacy(self, idx: int):
         """Legacy __getitem__ for old single HDF5 structure."""
@@ -505,7 +707,11 @@ class VsdVideoDataset(Dataset):
         height, width = 100, 100
         frames = data_slice.shape[1]
         reshaped_data = data_slice.reshape(height, width, frames)
-        tensor_data = torch.from_numpy(reshaped_data).unsqueeze(0).permute(0, 3, 1, 2)
+        tensor_data = torch.from_numpy(reshaped_data).unsqueeze(0).permute(0, 3, 1, 2).float()
+        
+        # Apply frame cropping if specified (legacy mode)
+        if hasattr(self, 'crop_frame') and self.crop_frame is not None:
+            tensor_data = self._apply_crop(tensor_data, height, width)
         
         if self.normalize and self.normalizer is not None:
             tensor_data = self.normalizer.normalize(tensor_data, self.normalization_stats)

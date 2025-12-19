@@ -10,9 +10,13 @@ stats_json_path: "/content/drive/My Drive/Gonda_research_Hamutal_2024/Ossnat/VSD
 processed_root: "/content/drive/My Drive/Gonda_research_Hamutal_2024/Ossnat/VSD_FM/Data/ProcessedData/DataFromYarden/splits" 
 normalization_type: baseline_zscore
 baseline_frame: 20
-frame_start: 1
-frame_end: 100
+frame_start: 30
+frame_end: 150
 frames: 100
+# Frame cropping: None (no crop), "square", or "circle"
+# crop_radius: 10-50, where 50 = full width/height (100 pixels)
+crop_frame: None  # None, "square", or "circle"
+crop_radius: None  # 10-50 (only used if crop_frame is set)
 height: 100
 width: 100
 channels: 1
