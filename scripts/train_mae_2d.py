@@ -64,12 +64,13 @@ from src.utils.mae_utils import (
 class MAE2DTrainer:
     """Custom trainer for MAE 2D that handles frame extraction and masking."""
     
-    def __init__(self, model, optimizer, device, logger=None, use_tpu=False):
+    def __init__(self, model, optimizer, device, logger=None, use_tpu=False, max_grad_norm=1.0):
         self.model = model
         self.optimizer = optimizer
         self.device = device
         self.logger = logger
         self.use_tpu = use_tpu
+        self.max_grad_norm = max_grad_norm  # Gradient clipping
         # Only use GradScaler for CUDA, not for TPU (TPU uses different precision)
         self.scaler = torch.cuda.amp.GradScaler() if not use_tpu and torch.cuda.is_available() else None
         
@@ -80,7 +81,8 @@ class MAE2DTrainer:
         num_batches = 0
         # Batch loss values to reduce host-device transfers
         loss_buffer = []
-        log_interval = 10  # Log every N batches instead of every batch
+        log_interval = 100  # Log every 100 batches for more frequent updates
+        print_interval = 100  # Print detailed info every 100 batches
         
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1} [Train]")
         for batch_idx, batch in enumerate(pbar):
@@ -90,6 +92,14 @@ class MAE2DTrainer:
             frame_batch = extract_single_frame(batch)
             mae_batch = create_masked_batch(frame_batch, mask_ratio=0.75)
             
+            # Validate input data (check for NaN/Inf)
+            for key, tensor in mae_batch.items():
+                if torch.isnan(tensor).any() or torch.isinf(tensor).any():
+                    print(f"\n⚠️ ERROR: NaN/Inf detected in input '{key}' at batch {batch_idx}")
+                    print(f"  Tensor stats: min={tensor.min().item():.4f}, max={tensor.max().item():.4f}, mean={tensor.mean().item():.4f}")
+                    print(f"  This suggests a problem with data loading or preprocessing!")
+                    raise ValueError(f"NaN/Inf in input data at batch {batch_idx}")
+            
             # Move to device
             mae_batch = {k: v.to(self.device, non_blocking=True) for k, v in mae_batch.items()}
             
@@ -98,7 +108,25 @@ class MAE2DTrainer:
                 # TPU uses bfloat16 by default, no need for autocast
                 output = self.model(mae_batch)
                 loss = output["loss"]
+                
+                # Check for NaN loss immediately
+                if torch.isnan(loss) or torch.isinf(loss):
+                    print(f"\n❌ NaN/Inf loss detected at batch {batch_idx}!")
+                    print(f"  Loss value: {loss.item()}")
+                    print(f"  Input stats: video_masked min={mae_batch['video_masked'].min().item():.4f}, max={mae_batch['video_masked'].max().item():.4f}")
+                    print(f"  Model parameters check:")
+                    for name, param in self.model.named_parameters():
+                        if torch.isnan(param).any() or torch.isinf(param).any():
+                            print(f"    {name}: has NaN/Inf")
+                    raise ValueError(f"NaN loss detected at batch {batch_idx}. Stopping training.")
+                
                 loss.backward()
+                
+                # Gradient clipping
+                if self.max_grad_norm > 0:
+                    import torch_xla.core.xla_model as xm
+                    xm.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                
                 # For TPU, use xm.optimizer_step
                 import torch_xla.core.xla_model as xm
                 xm.optimizer_step(self.optimizer)
@@ -108,13 +136,33 @@ class MAE2DTrainer:
                     output = self.model(mae_batch)
                     loss = output["loss"]
                 
+                # Check for NaN loss immediately
+                if torch.isnan(loss) or torch.isinf(loss):
+                    print(f"\n❌ NaN/Inf loss detected at batch {batch_idx}!")
+                    print(f"  Loss value: {loss.item()}")
+                    print(f"  Input stats: video_masked min={mae_batch['video_masked'].min().item():.4f}, max={mae_batch['video_masked'].max().item():.4f}")
+                    print(f"  Model parameters check:")
+                    for name, param in self.model.named_parameters():
+                        if torch.isnan(param).any() or torch.isinf(param).any():
+                            print(f"    {name}: has NaN/Inf")
+                    raise ValueError(f"NaN loss detected at batch {batch_idx}. Stopping training.")
+                
                 # Backward pass
                 if self.scaler:
                     self.scaler.scale(loss).backward()
+                    
+                    # Gradient clipping (unscale first)
+                    self.scaler.unscale_(self.optimizer)
+                    if self.max_grad_norm > 0:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                    
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
                 else:
                     loss.backward()
+                    # Gradient clipping
+                    if self.max_grad_norm > 0:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
                     self.optimizer.step()
             
             # Store loss in buffer (avoid immediate .item() call)
@@ -126,11 +174,39 @@ class MAE2DTrainer:
                 # Compute average from buffer
                 avg_batch_loss = torch.stack(loss_buffer).mean()
                 loss_val = avg_batch_loss.item()
+                
+                # Check for NaN in accumulated loss
+                if np.isnan(loss_val) or np.isinf(loss_val):
+                    print(f"\n❌ NaN/Inf detected in accumulated loss at batch {batch_idx+1}!")
+                    print(f"  Average loss: {loss_val}")
+                    print(f"  Buffer size: {len(loss_buffer)}")
+                    raise ValueError(f"NaN loss detected. Stopping training.")
+                
                 total_loss += loss_val * len(loss_buffer)
                 loss_buffer.clear()
                 
                 # Update progress bar
                 pbar.set_postfix({"loss": f"{loss_val:.4f}"})
+                
+                # Detailed print every 100 batches
+                if (batch_idx + 1) % print_interval == 0:
+                    print(f"\n📊 Batch {batch_idx+1}/{len(train_loader)} (Epoch {epoch+1})")
+                    print(f"  Loss: {loss_val:.6f}")
+                    if "metrics" in output:
+                        for key, value in output["metrics"].items():
+                            if isinstance(value, (int, float)):
+                                print(f"  {key}: {value:.6f}")
+                    # Check gradient norms
+                    total_norm = 0.0
+                    param_count = 0
+                    for p in self.model.parameters():
+                        if p.grad is not None:
+                            param_norm = p.grad.data.norm(2)
+                            total_norm += param_norm.item() ** 2
+                            param_count += 1
+                    total_norm = total_norm ** (1. / 2)
+                    print(f"  Gradient norm: {total_norm:.6f}")
+                    print(f"  Learning rate: {self.optimizer.param_groups[0]['lr']:.2e}")
                 
                 # Log to tensorboard (less frequently)
                 if self.logger:
@@ -626,8 +702,10 @@ def train_mae_2d_from_config(config_path=None, cfg=None, epochs=None,
     # Create logger
     logger = TBLogger(log_dir=log_dir)
     
-    # Create trainer
-    trainer = MAE2DTrainer(model, optimizer, device, logger, use_tpu=use_tpu)
+    # Create trainer with gradient clipping
+    max_grad_norm = cfg.get("max_grad_norm", 1.0)  # Gradient clipping to prevent explosion
+    trainer = MAE2DTrainer(model, optimizer, device, logger, use_tpu=use_tpu, max_grad_norm=max_grad_norm)
+    print(f"  Gradient clipping: max_norm={max_grad_norm}")
     
     # Training loop
     num_epochs = cfg.get("epochs", 10)

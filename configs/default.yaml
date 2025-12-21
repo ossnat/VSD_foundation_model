@@ -41,9 +41,10 @@ embed_dim: 256
 
 
 # Optim
-epochs: 5 # keep tiny for smoke test
-lr: 0.001
+epochs: 3 # keep tiny for smoke test
+lr: 0.0001  # Reduced from 0.001 - MAE training is sensitive to learning rate
 weight_decay: 0.05
+max_grad_norm: 1.0  # Gradient clipping to prevent NaN (0.0 = disabled)
 seed: 42
 log_dir: logs
 ckpt_dir: checkpoints
