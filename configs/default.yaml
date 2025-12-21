@@ -20,8 +20,11 @@ crop_radius: None  # 10-50 (only used if crop_frame is set)
 height: 100
 width: 100
 channels: 1
-batch_size: 8
-num_workers: 2
+batch_size: 256  # For TPU/Colab: use 256, 512, or 1024 (must be multiple of 8 for TPU)
+num_workers: 4
+pin_memory: true  # Faster GPU transfer
+persistent_workers: true  # Keep workers alive between epochs (faster)
+prefetch_factor: 2  # Prefetch batches
 train_split: 0.8  # 80% for training, 20% for validation
 window_size: 0  # 0 disables windowing; >0 uses non-overlapping windows (T per sample)
 
