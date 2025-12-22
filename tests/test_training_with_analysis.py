@@ -73,6 +73,36 @@ def create_limited_dataset(dataset, max_samples):
     return Subset(dataset, indices)
 
 
+def prepare_model_input(batch, model, device):
+    """
+    Prepare input for model based on model type.
+    Handles both new MAESystem (dict input) and old VideoMAE (tensor input).
+    """
+    # Check if model expects dict (new MAESystem) or tensor (old VideoMAE)
+    model_type = type(model).__name__
+    
+    if model_type == "MAESystem":
+        # New model: expects dict with video_masked, video_target, mask
+        frame_batch = extract_single_frame(batch)
+        mae_batch = create_masked_batch(frame_batch, mask_ratio=0.75)
+        mae_batch = {k: v.to(device, non_blocking=True) for k, v in mae_batch.items()}
+        return mae_batch
+    else:
+        # Old VideoMAE: expects tensor (B, C, T, H, W)
+        # Extract video from batch dict
+        if isinstance(batch, dict):
+            video = batch.get("video", None)
+            if video is None:
+                raise ValueError("Batch dict must contain 'video' key for old VideoMAE model")
+            # Old model expects (B, C, T, H, W) - ensure temporal dimension exists
+            if len(video.shape) == 4:  # (B, C, H, W)
+                video = video.unsqueeze(2)  # Add temporal dimension: (B, C, 1, H, W)
+            return video.to(device, non_blocking=True)
+        else:
+            # Already a tensor
+            return batch.to(device, non_blocking=True)
+
+
 def analyze_gradients(model, train_loader, device, max_batches=10):
     """
     Analyze gradients for exploding/vanishing gradient problems.
@@ -105,16 +135,19 @@ def analyze_gradients(model, train_loader, device, max_batches=10):
         
         optimizer.zero_grad()
         
-        # Extract single frame and create masked batch
-        frame_batch = extract_single_frame(batch)
-        mae_batch = create_masked_batch(frame_batch, mask_ratio=0.75)
-        
-        # Move to device
-        mae_batch = {k: v.to(device, non_blocking=True) for k, v in mae_batch.items()}
+        # Prepare input based on model type
+        model_input = prepare_model_input(batch, model, device)
         
         # Forward pass
-        output = model(mae_batch)
-        loss = output["loss"]
+        output = model(model_input)
+        
+        # Extract loss (handle both dict and tensor outputs)
+        if isinstance(output, dict):
+            loss = output["loss"]
+        elif torch.is_tensor(output):
+            loss = output
+        else:
+            raise ValueError(f"Unexpected output type: {type(output)}")
         
         # Backward pass
         loss.backward()
@@ -296,16 +329,19 @@ def train_with_monitoring(model, train_loader, val_loader, device, epochs=3,
         for batch_idx, batch in enumerate(pbar):
             optimizer.zero_grad()
             
-            # Extract single frame and create masked batch
-            frame_batch = extract_single_frame(batch)
-            mae_batch = create_masked_batch(frame_batch, mask_ratio=0.75)
-            
-            # Move to device
-            mae_batch = {k: v.to(device, non_blocking=True) for k, v in mae_batch.items()}
+            # Prepare input based on model type
+            model_input = prepare_model_input(batch, model, device)
             
             # Forward pass
-            output = model(mae_batch)
-            loss = output["loss"]
+            output = model(model_input)
+            
+            # Extract loss (handle both dict and tensor outputs)
+            if isinstance(output, dict):
+                loss = output["loss"]
+            elif torch.is_tensor(output):
+                loss = output
+            else:
+                raise ValueError(f"Unexpected output type: {type(output)}")
             
             # Backward pass
             loss.backward()
@@ -338,16 +374,19 @@ def train_with_monitoring(model, train_loader, val_loader, device, epochs=3,
         with torch.no_grad():
             pbar = tqdm(val_loader, desc=f"Val Epoch {epoch+1}")
             for batch_idx, batch in enumerate(pbar):
-                # Extract single frame and create masked batch
-                frame_batch = extract_single_frame(batch)
-                mae_batch = create_masked_batch(frame_batch, mask_ratio=0.75)
-                
-                # Move to device
-                mae_batch = {k: v.to(device, non_blocking=True) for k, v in mae_batch.items()}
+                # Prepare input based on model type
+                model_input = prepare_model_input(batch, model, device)
                 
                 # Forward pass
-                output = model(mae_batch)
-                loss = output["loss"]
+                output = model(model_input)
+                
+                # Extract loss (handle both dict and tensor outputs)
+                if isinstance(output, dict):
+                    loss = output["loss"]
+                elif torch.is_tensor(output):
+                    loss = output
+                else:
+                    raise ValueError(f"Unexpected output type: {type(output)}")
                 
                 loss_val = loss.item()
                 epoch_val_losses.append(loss_val)
@@ -386,24 +425,27 @@ def evaluate_test_set(model, test_loader, device):
     print(f"\nEvaluating on test set...")
     with torch.no_grad():
         for batch in tqdm(test_loader, desc="Test evaluation"):
-            # Extract single frame and create masked batch
-            frame_batch = extract_single_frame(batch)
-            mae_batch = create_masked_batch(frame_batch, mask_ratio=0.75)
-            
-            # Move to device
-            mae_batch = {k: v.to(device, non_blocking=True) for k, v in mae_batch.items()}
+            # Prepare input based on model type
+            model_input = prepare_model_input(batch, model, device)
             
             # Forward pass
-            output = model(mae_batch)
+            output = model(model_input)
             
-            loss = output["loss"].item()
-            all_losses.append(loss)
-            
-            if "metrics" in output:
-                metrics = output["metrics"]
-                all_mse_overall.append(metrics.get("mse_overall", 0))
-                all_mse_masked.append(metrics.get("mse_masked", 0))
-                all_mse_visible.append(metrics.get("mse_visible", 0))
+            # Extract loss and metrics
+            if isinstance(output, dict):
+                loss = output["loss"].item()
+                all_losses.append(loss)
+                
+                if "metrics" in output:
+                    metrics = output["metrics"]
+                    all_mse_overall.append(metrics.get("mse_overall", 0))
+                    all_mse_masked.append(metrics.get("mse_masked", 0))
+                    all_mse_visible.append(metrics.get("mse_visible", 0))
+            elif torch.is_tensor(output):
+                loss = output.item()
+                all_losses.append(loss)
+            else:
+                raise ValueError(f"Unexpected output type: {type(output)}")
     
     # Compute statistics
     results = {
