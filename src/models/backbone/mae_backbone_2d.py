@@ -27,12 +27,18 @@ class MAEResNet18Backbone(nn.Module):
                 padding=original_conv.padding,
                 bias=original_conv.bias is not None
             )
-            # Initialize weights: average the RGB channels if pretrained
+            # Initialize weights: average the RGB channels if pretrained, otherwise use He initialization
             if pretrained and original_conv.weight is not None:
                 with torch.no_grad():
                     self.input_conv.weight.data = original_conv.weight.data.mean(dim=1, keepdim=True)
                     if self.input_conv.bias is not None and original_conv.bias is not None:
                         self.input_conv.bias.data = original_conv.bias.data.clone()
+            else:
+                # Use He (Kaiming) initialization for random initialization
+                # This is PyTorch's default for Conv2d, but we make it explicit
+                nn.init.kaiming_normal_(self.input_conv.weight, mode='fan_out', nonlinearity='relu')
+                if self.input_conv.bias is not None:
+                    nn.init.constant_(self.input_conv.bias, 0)
         else:
             self.input_conv = None
         

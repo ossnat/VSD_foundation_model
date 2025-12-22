@@ -23,17 +23,25 @@ def build_ssl_model(cfg):
     # MAE 2D model (single frames)
     if model_type == "mae_2d":
         # Build encoder
+        # Default to False: pretrained ResNet18 is trained on ImageNet (natural images),
+        # which is very different from VSD data. Random initialization is better.
         encoder = MAEResNet18Backbone(
-            pretrained=cfg.get("pretrained", True),
+            pretrained=cfg.get("pretrained", False),
             in_channels=in_channels
         )
         
-        # Build decoder
+        # Build decoder with configurable final activation and normalization
         hidden_dim = cfg.get("hidden_dim", 256)
+        # Default: tanh to help prevent NaN losses (even if data is outside [-1,1], it prevents extreme outputs)
+        final_activation = cfg.get("decoder_final_activation", "tanh")
+        # LayerNorm is more stable for MAE with masked inputs (default)
+        norm_type = cfg.get("decoder_norm_type", "layer")  # "layer" (default), "batch", or "none"
         decoder = MAEDecoder2D(
             in_channels=encoder.feature_dim,
             out_channels=in_channels,
-            hidden_dim=hidden_dim
+            hidden_dim=hidden_dim,
+            final_activation=final_activation,
+            norm_type=norm_type
         )
         
         # Build config for MAESystem

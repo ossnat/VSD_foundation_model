@@ -708,7 +708,7 @@ def train_mae_2d_from_config(config_path=None, cfg=None, epochs=None,
     print(f"  Gradient clipping: max_norm={max_grad_norm}")
     
     # Training loop
-    num_epochs = cfg.get("epochs", 10)
+    num_epochs = cfg.get("epochs", 3)
     best_val_loss = float('inf')
     
     print(f"\nStarting training for {num_epochs} epochs...")

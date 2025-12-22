@@ -38,11 +38,14 @@ patch_size: [4, 8, 8] # t, h, w
 # Model
 model: cnn3d # cnn3d (encoder) used inside MAE
 embed_dim: 256
+pretrained: false  # false (recommended for VSD data), true (ImageNet pretrained - not ideal for VSD)
+decoder_final_activation: tanh  # tanh (helps prevent NaN), none, relu, or sigmoid
+decoder_norm_type: layer  # layer (more stable for MAE), batch, or none
 
 
 # Optim
 epochs: 3 # keep tiny for smoke test
-lr: 0.0001  # Reduced from 0.001 - MAE training is sensitive to learning rate
+lr: 0.00001  # Reduced from 0.001 - MAE training is sensitive to learning rate
 weight_decay: 0.05
 max_grad_norm: 1.0  # Gradient clipping to prevent NaN (0.0 = disabled)
 seed: 42

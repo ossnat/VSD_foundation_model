@@ -32,8 +32,26 @@ class MAELoss(nn.Module):
         # Apply mask: keep only masked regions (mask == 0)
         masked_loss = loss_per_element * (1 - mask)
         
-        # Average over masked patches
-        loss = masked_loss.sum() / ((1 - mask).sum() + 1e-8)
+        # Count masked pixels (where mask == 0)
+        num_masked = (1 - mask).sum()
+        
+        # Check for edge case: no masked pixels (shouldn't happen, but prevent division issues)
+        if num_masked < 1:
+            # Fallback: use all pixels if mask is invalid
+            num_masked = mask.numel()
+            masked_loss = loss_per_element
+        
+        # Average over masked patches with better numerical stability
+        loss = masked_loss.sum() / (num_masked + 1e-8)
+        
+        # Additional check for NaN/Inf
+        if torch.isnan(loss) or torch.isinf(loss):
+            # Diagnostic info
+            print(f"WARNING: NaN/Inf in loss calculation!")
+            print(f"  Reconstruction range: [{reconstruction.min().item():.4f}, {reconstruction.max().item():.4f}]")
+            print(f"  Target range: [{target.min().item():.4f}, {target.max().item():.4f}]")
+            print(f"  Masked pixels: {num_masked.item()}")
+            print(f"  Masked loss sum: {masked_loss.sum().item()}")
         
         return loss
 
