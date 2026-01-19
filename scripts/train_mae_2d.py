@@ -64,54 +64,164 @@ from src.utils.mae_utils import (
 class MAE2DTrainer:
     """Custom trainer for MAE 2D that handles frame extraction and masking."""
     
-    def __init__(self, model, optimizer, device, logger=None):
+    def __init__(self, model, optimizer, device, logger=None, use_tpu=False, max_grad_norm=1.0):
         self.model = model
         self.optimizer = optimizer
         self.device = device
         self.logger = logger
-        self.scaler = torch.cuda.amp.GradScaler()
+        self.use_tpu = use_tpu
+        self.max_grad_norm = max_grad_norm  # Gradient clipping
+        # Only use GradScaler for CUDA, not for TPU (TPU uses different precision)
+        self.scaler = torch.cuda.amp.GradScaler() if not use_tpu and torch.cuda.is_available() else None
         
     def train_epoch(self, train_loader, epoch):
         """Train for one epoch."""
         self.model.train()
         total_loss = 0.0
         num_batches = 0
+        # Batch loss values to reduce host-device transfers
+        loss_buffer = []
+        log_interval = 100  # Log every 100 batches for more frequent updates
+        print_interval = 100  # Print detailed info every 100 batches
         
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1} [Train]")
-        for batch in pbar:
+        for batch_idx, batch in enumerate(pbar):
             self.optimizer.zero_grad()
             
             # Extract single frame and create masked batch
             frame_batch = extract_single_frame(batch)
             mae_batch = create_masked_batch(frame_batch, mask_ratio=0.75)
             
+            # Validate input data (check for NaN/Inf)
+            for key, tensor in mae_batch.items():
+                if torch.isnan(tensor).any() or torch.isinf(tensor).any():
+                    print(f"\n⚠️ ERROR: NaN/Inf detected in input '{key}' at batch {batch_idx}")
+                    print(f"  Tensor stats: min={tensor.min().item():.4f}, max={tensor.max().item():.4f}, mean={tensor.mean().item():.4f}")
+                    print(f"  This suggests a problem with data loading or preprocessing!")
+                    raise ValueError(f"NaN/Inf in input data at batch {batch_idx}")
+            
             # Move to device
-            mae_batch = {k: v.to(self.device) for k, v in mae_batch.items()}
+            mae_batch = {k: v.to(self.device, non_blocking=True) for k, v in mae_batch.items()}
             
             # Forward pass with mixed precision
-            with torch.cuda.amp.autocast():
+            if self.use_tpu:
+                # TPU uses bfloat16 by default, no need for autocast
                 output = self.model(mae_batch)
                 loss = output["loss"]
+                
+                # Check for NaN loss immediately
+                if torch.isnan(loss) or torch.isinf(loss):
+                    print(f"\n❌ NaN/Inf loss detected at batch {batch_idx}!")
+                    print(f"  Loss value: {loss.item()}")
+                    print(f"  Input stats: video_masked min={mae_batch['video_masked'].min().item():.4f}, max={mae_batch['video_masked'].max().item():.4f}")
+                    print(f"  Model parameters check:")
+                    for name, param in self.model.named_parameters():
+                        if torch.isnan(param).any() or torch.isinf(param).any():
+                            print(f"    {name}: has NaN/Inf")
+                    raise ValueError(f"NaN loss detected at batch {batch_idx}. Stopping training.")
+                
+                loss.backward()
+                
+                # Gradient clipping
+                if self.max_grad_norm > 0:
+                    import torch_xla.core.xla_model as xm
+                    xm.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                
+                # For TPU, use xm.optimizer_step
+                import torch_xla.core.xla_model as xm
+                xm.optimizer_step(self.optimizer)
+            else:
+                # CUDA mixed precision
+                with torch.cuda.amp.autocast():
+                    output = self.model(mae_batch)
+                    loss = output["loss"]
+                
+                # Check for NaN loss immediately
+                if torch.isnan(loss) or torch.isinf(loss):
+                    print(f"\n❌ NaN/Inf loss detected at batch {batch_idx}!")
+                    print(f"  Loss value: {loss.item()}")
+                    print(f"  Input stats: video_masked min={mae_batch['video_masked'].min().item():.4f}, max={mae_batch['video_masked'].max().item():.4f}")
+                    print(f"  Model parameters check:")
+                    for name, param in self.model.named_parameters():
+                        if torch.isnan(param).any() or torch.isinf(param).any():
+                            print(f"    {name}: has NaN/Inf")
+                    raise ValueError(f"NaN loss detected at batch {batch_idx}. Stopping training.")
+                
+                # Backward pass
+                if self.scaler:
+                    self.scaler.scale(loss).backward()
+                    
+                    # Gradient clipping (unscale first)
+                    self.scaler.unscale_(self.optimizer)
+                    if self.max_grad_norm > 0:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                    
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    loss.backward()
+                    # Gradient clipping
+                    if self.max_grad_norm > 0:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                    self.optimizer.step()
             
-            # Backward pass
-            self.scaler.scale(loss).backward()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-            
-            # Track metrics
-            total_loss += loss.item()
+            # Store loss in buffer (avoid immediate .item() call)
+            loss_buffer.append(loss.detach())
             num_batches += 1
             
-            # Update progress bar
-            pbar.set_postfix({"loss": f"{loss.item():.4f}"})
-            
-            # Log to tensorboard
-            if self.logger:
-                global_step = epoch * len(train_loader) + num_batches
-                self.logger.log_scalar("train/loss", loss.item(), global_step)
-                if "metrics" in output:
-                    for key, value in output["metrics"].items():
-                        self.logger.log_scalar(f"train/{key}", value, global_step)
+            # Update progress bar and log less frequently to reduce host-device transfers
+            if (batch_idx + 1) % log_interval == 0 or (batch_idx + 1) == len(train_loader):
+                # Compute average from buffer
+                avg_batch_loss = torch.stack(loss_buffer).mean()
+                loss_val = avg_batch_loss.item()
+                
+                # Check for NaN in accumulated loss
+                if np.isnan(loss_val) or np.isinf(loss_val):
+                    print(f"\n❌ NaN/Inf detected in accumulated loss at batch {batch_idx+1}!")
+                    print(f"  Average loss: {loss_val}")
+                    print(f"  Buffer size: {len(loss_buffer)}")
+                    raise ValueError(f"NaN loss detected. Stopping training.")
+                
+                total_loss += loss_val * len(loss_buffer)
+                loss_buffer.clear()
+                
+                # Update progress bar
+                pbar.set_postfix({"loss": f"{loss_val:.4f}"})
+                
+                # Detailed print every 100 batches
+                if (batch_idx + 1) % print_interval == 0:
+                    print(f"\n📊 Batch {batch_idx+1}/{len(train_loader)} (Epoch {epoch+1})")
+                    print(f"  Loss: {loss_val:.6f}")
+                    if "metrics" in output:
+                        for key, value in output["metrics"].items():
+                            if isinstance(value, (int, float)):
+                                print(f"  {key}: {value:.6f}")
+                    # Check gradient norms
+                    total_norm = 0.0
+                    param_count = 0
+                    for p in self.model.parameters():
+                        if p.grad is not None:
+                            param_norm = p.grad.data.norm(2)
+                            total_norm += param_norm.item() ** 2
+                            param_count += 1
+                    total_norm = total_norm ** (1. / 2)
+                    print(f"  Gradient norm: {total_norm:.6f}")
+                    print(f"  Learning rate: {self.optimizer.param_groups[0]['lr']:.2e}")
+                
+                # Log to tensorboard (less frequently)
+                if self.logger:
+                    global_step = epoch * len(train_loader) + batch_idx + 1
+                    self.logger.log_scalar("train/loss", loss_val, global_step)
+                    if "metrics" in output:
+                        for key, value in output["metrics"].items():
+                            # Only log scalar metrics (avoid .item() for tensors)
+                            if isinstance(value, (int, float)):
+                                self.logger.log_scalar(f"train/{key}", value, global_step)
+        
+        # Handle any remaining losses in buffer
+        if loss_buffer:
+            avg_batch_loss = torch.stack(loss_buffer).mean()
+            total_loss += avg_batch_loss.item() * len(loss_buffer)
         
         avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
         return avg_loss
@@ -125,31 +235,48 @@ class MAE2DTrainer:
         
         with torch.no_grad():
             pbar = tqdm(val_loader, desc=f"Epoch {epoch+1} [Val]")
-            for batch in pbar:
+            loss_buffer = []
+            for batch_idx, batch in enumerate(pbar):
                 # Extract single frame and create masked batch
                 frame_batch = extract_single_frame(batch)
                 mae_batch = create_masked_batch(frame_batch, mask_ratio=0.75)
                 
                 # Move to device
-                mae_batch = {k: v.to(self.device) for k, v in mae_batch.items()}
+                mae_batch = {k: v.to(self.device, non_blocking=True) for k, v in mae_batch.items()}
                 
                 # Forward pass
-                with torch.cuda.amp.autocast():
+                if self.use_tpu:
                     output = self.model(mae_batch)
                     loss = output["loss"]
+                else:
+                    with torch.cuda.amp.autocast():
+                        output = self.model(mae_batch)
+                        loss = output["loss"]
                 
-                # Track metrics
-                total_loss += loss.item()
+                # Store loss in buffer (avoid immediate .item() call)
+                loss_buffer.append(loss.detach())
                 num_batches += 1
                 
-                # Accumulate metrics
+                # Update progress bar less frequently
+                if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == len(val_loader):
+                    avg_batch_loss = torch.stack(loss_buffer).mean()
+                    loss_val = avg_batch_loss.item()
+                    total_loss += loss_val * len(loss_buffer)
+                    loss_buffer.clear()
+                    pbar.set_postfix({"loss": f"{loss_val:.4f}"})
+                
+                # Accumulate metrics (only scalar values)
                 if "metrics" in output:
                     for key, value in output["metrics"].items():
-                        if key not in all_metrics:
-                            all_metrics[key] = []
-                        all_metrics[key].append(value)
-                
-                pbar.set_postfix({"loss": f"{loss.item():.4f}"})
+                        if isinstance(value, (int, float)):
+                            if key not in all_metrics:
+                                all_metrics[key] = []
+                            all_metrics[key].append(value)
+        
+        # Handle any remaining losses in buffer
+        if loss_buffer:
+            avg_batch_loss = torch.stack(loss_buffer).mean()
+            total_loss += avg_batch_loss.item() * len(loss_buffer)
         
         avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
         
@@ -511,19 +638,57 @@ def train_mae_2d_from_config(config_path=None, cfg=None, epochs=None,
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"\nUsing device: {device}")
     
+    # Check for TPU support (for Colab TPU)
+    use_tpu = False
+    if hasattr(torch, 'xla') and torch.xla.is_available():
+        import torch_xla.core.xla_model as xm
+        device = xm.xla_device()
+        use_tpu = True
+        print(f"TPU detected! Using XLA device: {device}")
+        print(f"TPU has {torch.xla.device_count()} cores")
+    
     # Create datasets (use full datasets, not limited)
     print(f"\nCreating datasets...")
-    train_dataset_full = load_dataset(cfg, split="train", batch_size=1, num_workers=0, shuffle=False).dataset
-    val_dataset_full = load_dataset(cfg, split="val", batch_size=1, num_workers=0, shuffle=False).dataset
-    test_dataset_full = load_dataset(cfg, split="test", batch_size=1, num_workers=0, shuffle=False).dataset
+    train_dataset_full = load_dataset(cfg, split="train", batch_size=1, num_workers=4, shuffle=False).dataset
+    val_dataset_full = load_dataset(cfg, split="val", batch_size=1, num_workers=4, shuffle=False).dataset
+    test_dataset_full = load_dataset(cfg, split="test", batch_size=1, num_workers=4, shuffle=False).dataset
     
     print(f"  Dataset sizes: train={len(train_dataset_full)}, val={len(val_dataset_full)}, test={len(test_dataset_full)}")
     
-    # Create DataLoaders
-    batch_size = cfg.get("batch_size", 8)
-    train_loader = DataLoader(train_dataset_full, batch_size=batch_size, shuffle=True, num_workers=cfg.get("num_workers", 2))
-    val_loader = DataLoader(val_dataset_full, batch_size=batch_size, shuffle=False, num_workers=cfg.get("num_workers", 2))
-    test_loader = DataLoader(test_dataset_full, batch_size=batch_size, shuffle=False, num_workers=cfg.get("num_workers", 2))
+    # Create DataLoaders with optimizations for Colab/TPU
+    batch_size = cfg.get("batch_size", 256)  # Default to 256 for TPU efficiency (multiple of 8)
+    num_workers = cfg.get("num_workers", 4)
+    pin_memory = cfg.get("pin_memory", True)  # Faster GPU transfer
+    persistent_workers = cfg.get("persistent_workers", True)  # Keep workers alive between epochs
+    prefetch_factor = cfg.get("prefetch_factor", 2)  # Prefetch batches
+    
+    train_loader = DataLoader(
+        train_dataset_full, 
+        batch_size=batch_size, 
+        shuffle=True, 
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers if num_workers > 0 else False,
+        prefetch_factor=prefetch_factor if num_workers > 0 else None
+    )
+    val_loader = DataLoader(
+        val_dataset_full, 
+        batch_size=batch_size, 
+        shuffle=False, 
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers if num_workers > 0 else False,
+        prefetch_factor=prefetch_factor if num_workers > 0 else None
+    )
+    test_loader = DataLoader(
+        test_dataset_full, 
+        batch_size=batch_size, 
+        shuffle=False, 
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers if num_workers > 0 else False,
+        prefetch_factor=prefetch_factor if num_workers > 0 else None
+    )
     
     # Build model
     model = build_mae_2d_model(cfg, device)
@@ -537,8 +702,10 @@ def train_mae_2d_from_config(config_path=None, cfg=None, epochs=None,
     # Create logger
     logger = TBLogger(log_dir=log_dir)
     
-    # Create trainer
-    trainer = MAE2DTrainer(model, optimizer, device, logger)
+    # Create trainer with gradient clipping
+    max_grad_norm = cfg.get("max_grad_norm", 1.0)  # Gradient clipping to prevent explosion
+    trainer = MAE2DTrainer(model, optimizer, device, logger, use_tpu=use_tpu, max_grad_norm=max_grad_norm)
+    print(f"  Gradient clipping: max_norm={max_grad_norm}")
     
     # Training loop
     num_epochs = cfg.get("epochs", 10)

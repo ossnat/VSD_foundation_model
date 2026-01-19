@@ -10,14 +10,21 @@ stats_json_path: "/content/drive/My Drive/Gonda_research_Hamutal_2024/Ossnat/VSD
 processed_root: "/content/drive/My Drive/Gonda_research_Hamutal_2024/Ossnat/VSD_FM/Data/ProcessedData/DataFromYarden/splits" 
 normalization_type: baseline_zscore
 baseline_frame: 20
-frame_start: 1
-frame_end: 100
+frame_start: 30
+frame_end: 150
 frames: 100
+# Frame cropping: None (no crop), "square", or "circle"
+# crop_radius: 10-50, where 50 = full width/height (100 pixels)
+crop_frame: None  # None, "square", or "circle"
+crop_radius: None  # 10-50 (only used if crop_frame is set)
 height: 100
 width: 100
 channels: 1
-batch_size: 8
-num_workers: 2
+batch_size: 256  # For TPU/Colab: use 256, 512, or 1024 (must be multiple of 8 for TPU)
+num_workers: 4
+pin_memory: true  # Faster GPU transfer
+persistent_workers: true  # Keep workers alive between epochs (faster)
+prefetch_factor: 2  # Prefetch batches
 train_split: 0.8  # 80% for training, 20% for validation
 window_size: 0  # 0 disables windowing; >0 uses non-overlapping windows (T per sample)
 
@@ -34,9 +41,10 @@ embed_dim: 256
 
 
 # Optim
-epochs: 5 # keep tiny for smoke test
-lr: 0.001
+epochs: 3 # keep tiny for smoke test
+lr: 0.0001  # Reduced from 0.001 - MAE training is sensitive to learning rate
 weight_decay: 0.05
+max_grad_norm: 1.0  # Gradient clipping to prevent NaN (0.0 = disabled)
 seed: 42
 log_dir: logs
 ckpt_dir: checkpoints
