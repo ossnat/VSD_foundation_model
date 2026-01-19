@@ -2,6 +2,7 @@ import os
 import argparse
 import yaml
 import torch
+from pathlib import Path
 from torch.utils.data import DataLoader
 from src.data import *
 from src.models import build_ssl_model
@@ -12,8 +13,20 @@ from src.utils.logger import TBLogger, set_seed
 
 
 def main(cfg_path: str):
+    cfg_path = Path(cfg_path)
     with open(cfg_path, "r") as f:
         cfg = yaml.safe_load(f)
+
+    # Resolve any relative data paths based on the project root (parent.parent from config file)
+    base_dir = cfg_path.resolve().parent.parent
+    for key in ("split_csv_path", "stats_json_path", "processed_root"):
+        value = cfg.get(key)
+        if value is None:
+            continue
+        value_path = Path(value)
+        if not value_path.is_absolute():
+            full_path = (base_dir / value_path).resolve()
+            cfg[key] = str(full_path)
 
 
     set_seed(cfg.get("seed", 42))

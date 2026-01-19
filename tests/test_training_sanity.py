@@ -88,7 +88,18 @@ def test_training_sanity():
     print(f"\n[1] Loading config from {config_path}...")
     with open(config_path, 'r') as f:
         cfg = yaml.safe_load(f)
-    
+
+    # Resolve any relative data paths based on the project root (parent.parent from config file)
+    base_dir = config_path.resolve().parent.parent
+    for key in ("split_csv_path", "stats_json_path", "processed_root"):
+        value = cfg.get(key)
+        if value is None:
+            continue
+        value_path = Path(value)
+        if not value_path.is_absolute():
+            full_path = (base_dir / value_path).resolve()
+            cfg[key] = str(full_path)
+
     # Check if using new CSV structure
     if 'split_csv_path' not in cfg or 'stats_json_path' not in cfg:
         print("ERROR: Config must contain 'split_csv_path' and 'stats_json_path' for new structure")
