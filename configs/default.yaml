@@ -1,6 +1,6 @@
 # Data
 dataset: vsd
-# Legacy HDF5 path
+# Legacy HDF5 path - OBSOLETE
 vsd_hdf5_path: "G:/My Drive/HDF5_DATA_AFTER_PREPROCESSING2/vsd_video_data.hdf5"
 normalize: true
 # Split data (relative to this project, starting from Data/)
