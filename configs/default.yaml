@@ -4,9 +4,9 @@ dataset: vsd
 vsd_hdf5_path: "G:/My Drive/HDF5_DATA_AFTER_PREPROCESSING2/vsd_video_data.hdf5"
 normalize: true
 # Split data (relative to this project, starting from Data/)
-split_csv_path: "Data/ProcessedData/DataFromYarden/splits/split_v1_seed17_strat_monkey.csv"
-stats_json_path: "Data/ProcessedData/DataFromYarden/splits/baseline_stats_v1_seed17_strat_monkey.json"
-processed_root: "Data/ProcessedData/DataFromYarden/splits"
+split_csv_path: "Data/FoundationData/ProcessedData/splits/split_v1_seed17_strat_monkey.csv"
+stats_json_path: "Data/FoundationData/ProcessedData/splits/baseline_stats_v1_seed17_strat_monkey.json"
+processed_root: "Data/FoundationData/ProcessedData/splits"
 normalization_type: baseline_zscore
 baseline_frame: 20
 frame_start: 30
