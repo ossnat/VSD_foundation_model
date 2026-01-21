@@ -448,7 +448,7 @@ class VsdVideoDataset(Dataset):
         trial_dataset = row['trial_dataset']
         
         # Handle relative paths if processed_root is provided
-        if self.processed_root is not None and not Path(target_file).is_absolute():
+        if self.processed_root is not None and not Path(target_file).is_absolute() and not self.processed_root in target_file:
             target_file = str(Path(self.processed_root) / target_file)
         
         # Parse shape from CSV
