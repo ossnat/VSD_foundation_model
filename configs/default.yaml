@@ -14,8 +14,8 @@ frame_end: 150
 frames: 100
 # Frame cropping: None (no crop), "square", or "circle"
 # crop_radius: 10-50, where 50 = full width/height (100 pixels)
-crop_frame: None  # None, "square", or "circle"
-crop_radius: None  # 10-50 (only used if crop_frame is set)
+crop_frame: null  # None, "square", or "circle"
+crop_radius: null  # 10-50 (only used if crop_frame is set)
 height: 100
 width: 100
 channels: 1
