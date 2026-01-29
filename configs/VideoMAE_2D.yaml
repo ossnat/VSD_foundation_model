@@ -1,0 +1,50 @@
+# Data
+dataset: vsd
+dataset_name: "vsd_mae"
+normalize: true
+
+# Split data (relative to this project, starting from Data/)
+split_csv_path: "Data/FoundationData/ProcessedData/splits/split_v1_seed17_strat_monkey.csv"
+stats_json_path: "Data/FoundationData/ProcessedData/splits/baseline_stats_v1_seed17_strat_monkey.json"
+processed_root: "Data/FoundationData/ProcessedData/splits"
+normalization_type: baseline_zscore
+baseline_frame: 20
+frame_start: 30
+frame_end: 150
+clip_length: 1
+
+# Frame cropping: None (no crop), "square", or "circle"
+# crop_radius: 10-50, where 50 = full width/height (100 pixels)
+crop_frame: null  # None, "square", or "circle"
+crop_radius: null  # 10-50 (only used if crop_frame is set)
+height: 100
+width: 100
+channels: 1
+batch_size: 256  # For TPU/Colab: use 256, 512, or 1024 (must be multiple of 8 for TPU)
+num_workers: 4
+pin_memory: true  # Faster GPU transfer
+persistent_workers: true  # Keep workers alive between epochs (faster)
+prefetch_factor: 2  # Prefetch batches
+train_split: 0.8  # 80% for training, 20% for validation
+window_size: 0  # 0 disables windowing; >0 uses non-overlapping windows (T per sample)
+
+
+# Task
+task: mae # mae | recon (plain autoencoder)
+mask_ratio: 0.5
+patch_size: [1, 8, 8] # t, h, w
+
+
+# Model
+model: cnn3d # cnn3d (encoder) used inside MAE
+embed_dim: 256
+
+
+# Optim
+epochs: 3 # keep tiny for smoke test
+lr: 0.0001  # Reduced from 0.001 - MAE training is sensitive to learning rate
+weight_decay: 0.05
+max_grad_norm: 1.0  # Gradient clipping to prevent NaN (0.0 = disabled)
+seed: 42
+log_dir: logs
+ckpt_dir: checkpoints
