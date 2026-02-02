@@ -1,8 +1,8 @@
 # Data
 dataset: vsd
-# Legacy HDF5 path - OBSOLETE
-vsd_hdf5_path: "G:/My Drive/HDF5_DATA_AFTER_PREPROCESSING2/vsd_video_data.hdf5"
+dataset_name: "vsd_mae"
 normalize: true
+
 # Split data (relative to this project, starting from Data/)
 split_csv_path: "Data/FoundationData/ProcessedData/splits/split_v1_seed17_strat_monkey.csv"
 stats_json_path: "Data/FoundationData/ProcessedData/splits/baseline_stats_v1_seed17_strat_monkey.json"
@@ -11,7 +11,8 @@ normalization_type: baseline_zscore
 baseline_frame: 20
 frame_start: 30
 frame_end: 150
-frames: 100
+clip_length: 1
+
 # Frame cropping: None (no crop), "square", or "circle"
 # crop_radius: 10-50, where 50 = full width/height (100 pixels)
 crop_frame: null  # None, "square", or "circle"
@@ -31,7 +32,7 @@ window_size: 0  # 0 disables windowing; >0 uses non-overlapping windows (T per s
 # Task
 task: mae # mae | recon (plain autoencoder)
 mask_ratio: 0.5
-patch_size: [4, 8, 8] # t, h, w
+patch_size: [1, 8, 8] # t, h, w
 
 
 # Model
