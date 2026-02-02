@@ -30,52 +30,33 @@ def load_dataset(cfg: Dict[str, Any],
     # Extract dataset parameters
     dataset_kwargs = {}
     
-    # Check if using new CSV-based structure
-    if 'split_csv_path' in cfg or 'stats_json_path' in cfg:
-        # New CSV-based structure
-        split_csv_path = cfg.get('split_csv_path')
-        stats_json_path = cfg.get('stats_json_path')
-        processed_root = cfg.get('processed_root')
-        
-        # If split_csv_path contains split name, extract it
-        # Otherwise, assume split CSV is in a split folder
-        if split_csv_path is None:
-            # Try to construct from split folder
-            split_folder = cfg.get('split_folder')
-            if split_folder:
-                import os
-                split_csv_path = os.path.join(split_folder, f'split_{split}.csv')
-                stats_json_path = os.path.join(split_folder, f'stats_{split}.json')
-        
-        dataset_kwargs = {
-            'split_csv_path': split_csv_path,
-            'split_name': split,
-            'stats_json_path': stats_json_path,
-            'processed_root': processed_root,
-            'frame_start': cfg.get('frame_start', 1),
-            'frame_end': cfg.get('frame_end', None),
-            'clip_length': cfg.get('clip_length', 1),
-        }
-        
-        # Remove None values
-        dataset_kwargs = {k: v for k, v in dataset_kwargs.items() if v is not None}
-    else:
-        # Legacy HDF5 structure
-        dataset_kwargs = {
-            'hdf5_path': cfg.get('hdf5_path'),
-            'normalize': cfg.get('normalize', False),
-            'normalization_type': cfg.get('normalization_type', 'baseline_zscore'),
-            'baseline_frame': cfg.get('baseline_frame', 20),
-            'frame_start': cfg.get('frame_start', 1),
-            'frame_end': cfg.get('frame_end', None),
-            'cache_dir': cfg.get('cache_dir', None),
-            'clip_length': cfg.get('clip_length', 1),
-            'trial_indices': cfg.get('trial_indices', None),
-            'index_entries': cfg.get('index_entries', None),
-        }
-        
-        # Remove None values
-        dataset_kwargs = {k: v for k, v in dataset_kwargs.items() if v is not None}
+    # New CSV-based structure
+    split_csv_path = cfg.get('split_csv_path')
+    stats_json_path = cfg.get('stats_json_path')
+    processed_root = cfg.get('processed_root')
+
+    # If split_csv_path contains split name, extract it
+    # Otherwise, assume split CSV is in a split folder
+    if split_csv_path is None:
+        # Try to construct from split folder
+        split_folder = cfg.get('split_folder')
+        if split_folder:
+            import os
+            split_csv_path = os.path.join(split_folder, f'split_{split}.csv')
+            stats_json_path = os.path.join(split_folder, f'stats_{split}.json')
+
+    dataset_kwargs = {
+        'split_csv_path': split_csv_path,
+        'split_name': split,
+        'stats_json_path': stats_json_path,
+        'processed_root': processed_root,
+        'frame_start': cfg.get('frame_start', 1),
+        'frame_end': cfg.get('frame_end', None),
+        'clip_length': cfg.get('clip_length', 1),
+    }
+
+    # Remove None values
+    dataset_kwargs = {k: v for k, v in dataset_kwargs.items() if v is not None}
     
     # Add any additional dataset-specific parameters
     if dataset_name == 'vsd_mae':
