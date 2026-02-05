@@ -68,9 +68,16 @@ class Trainer:
 
         # Dict-style batches
         if isinstance(batch, dict):
+            # DINO style (dict with crops + metadata)
+            if "crops" in batch:
+                crops = [b.to(self.device) for b in batch["crops"]]
+                out = self.model(crops)
+                return out if torch.is_tensor(out) else out["loss"]
+
             # MAE style batch
             if "video_masked" in batch and "video_target" in batch and "mask" in batch:
-                mae_batch = {k: v.to(self.device) for k, v in batch.items()}
+                mae_batch = {k: v.to(self.device) if torch.is_tensor(v) else v
+                             for k, v in batch.items()}
                 out = self.model(mae_batch)
                 # MAESystem returns dict with loss
                 return out["loss"] if isinstance(out, dict) and "loss" in out else out

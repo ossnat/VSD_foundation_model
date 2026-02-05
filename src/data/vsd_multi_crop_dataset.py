@@ -53,7 +53,12 @@ class VsdMultiCropDataset(VsdVideoDataset):
             crop_tensor = torch.from_numpy(crop).unsqueeze(0)  # Add channel back: (1, T, H, W)
             crops.append(crop_tensor)
         
-        return crops
+        return {
+            "crops": crops,
+            "monkey": sample["monkey"],
+            "date": sample["date"],
+            "condition": sample["condition"],
+        }
     
     def random_crop_resize(self, video: np.ndarray, scale_range: Tuple[float,float], target_size: Tuple[int,int,int]) -> np.ndarray:
         """
