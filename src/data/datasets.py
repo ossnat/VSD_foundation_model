@@ -372,6 +372,9 @@ class VsdVideoDataset(Dataset):
         if apply_circle_mask_after:
             tensor_data = tensor_data * circle_mask
         
+        # Impute any NaN/Inf values before returning
+        tensor_data = self._impute_non_finite(tensor_data)
+        
         mask_tensor = torch.zeros(1, frames, crop_height, crop_width, dtype=torch.float32)
         
         return {
@@ -383,6 +386,52 @@ class VsdVideoDataset(Dataset):
             "date": row["date"],
             "condition": row["condition"],
         }
+    
+    def _impute_non_finite(self, tensor_data: torch.Tensor) -> torch.Tensor:
+        """
+        Replace NaN/Inf values with the average of finite neighbors.
+        Neighboring voxels are defined in time and spatial directions.
+        """
+        if torch.isfinite(tensor_data).all():
+            return tensor_data
+        
+        data = tensor_data.clone()
+        finite = torch.isfinite(data)
+        
+        neighbor_sum = torch.zeros_like(data)
+        neighbor_count = torch.zeros_like(data, dtype=torch.int32)
+        
+        # Time neighbors (previous and next frame)
+        neighbor_sum[:, 1:, :, :] += data[:, :-1, :, :] * finite[:, :-1, :, :]
+        neighbor_count[:, 1:, :, :] += finite[:, :-1, :, :].to(torch.int32)
+        neighbor_sum[:, :-1, :, :] += data[:, 1:, :, :] * finite[:, 1:, :, :]
+        neighbor_count[:, :-1, :, :] += finite[:, 1:, :, :].to(torch.int32)
+        
+        # Spatial neighbors (up/down/left/right)
+        neighbor_sum[:, :, 1:, :] += data[:, :, :-1, :] * finite[:, :, :-1, :]
+        neighbor_count[:, :, 1:, :] += finite[:, :, :-1, :].to(torch.int32)
+        neighbor_sum[:, :, :-1, :] += data[:, :, 1:, :] * finite[:, :, 1:, :]
+        neighbor_count[:, :, :-1, :] += finite[:, :, 1:, :].to(torch.int32)
+        neighbor_sum[:, :, :, 1:] += data[:, :, :, :-1] * finite[:, :, :, :-1]
+        neighbor_count[:, :, :, 1:] += finite[:, :, :, :-1].to(torch.int32)
+        neighbor_sum[:, :, :, :-1] += data[:, :, :, 1:] * finite[:, :, :, 1:]
+        neighbor_count[:, :, :, :-1] += finite[:, :, :, 1:].to(torch.int32)
+        
+        neighbor_count_f = neighbor_count.to(data.dtype)
+        avg_neighbors = neighbor_sum / neighbor_count_f.clamp(min=1.0)
+        
+        needs_impute = ~finite
+        data = torch.where(needs_impute, avg_neighbors, data)
+        
+        # If no finite neighbors exist, fall back to 0.0
+        no_neighbors = needs_impute & (neighbor_count == 0)
+        if no_neighbors.any():
+            data[no_neighbors] = 0.0
+        
+        if not torch.isfinite(data).all():
+            data = torch.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        return data
     
     def _apply_crop(self, tensor_data: torch.Tensor, height: int, width: int):
         """
