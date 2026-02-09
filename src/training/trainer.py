@@ -124,11 +124,40 @@ class Trainer:
     def _forward_and_loss_debug(self, batch):
         """Forward + loss with NaN/Inf checks on inputs/outputs of all layers."""
         handles = []
-        error_message = {"msg": None}
+        error_message = {"msg": None, "sample": None}
+
+        def format_sample(b_idx):
+            if not isinstance(batch, dict) or b_idx is None:
+                return None
+            try:
+                monkey = batch.get("monkey", None)
+                date = batch.get("date", None)
+                condition = batch.get("condition", None)
+                if monkey is None or date is None or condition is None:
+                    return None
+                return f"Sample {b_idx} {monkey[b_idx]} {date[b_idx]} {condition[b_idx]}"
+            except Exception:
+                return None
+
+        def find_bad_sample(tensor):
+            if tensor.dim() == 0:
+                return None
+            # Assume batch dimension is 0
+            finite = torch.isfinite(tensor)
+            if finite.all():
+                return None
+            # Identify first batch index with any non-finite
+            bad_per_sample = ~finite.view(finite.shape[0], -1).all(dim=1)
+            if bad_per_sample.any():
+                return int(bad_per_sample.nonzero(as_tuple=False)[0].item())
+            return None
 
         def check_tensor(tensor, label):
             if torch.is_tensor(tensor) and not torch.isfinite(tensor).all():
                 error_message["msg"] = f"Non-finite values in {label}"
+                b_idx = find_bad_sample(tensor)
+                if b_idx is not None:
+                    error_message["sample"] = format_sample(b_idx)
                 return True
             return False
 
@@ -169,7 +198,10 @@ class Trainer:
         except RuntimeError as exc:
             if error_message["msg"] is None:
                 error_message["msg"] = str(exc)
-            print(f"Stopping training: {error_message['msg']}")
+            if error_message["sample"] is not None:
+                print(f"Stopping training: {error_message['msg']} ({error_message['sample']})")
+            else:
+                print(f"Stopping training: {error_message['msg']}")
             raise
         finally:
             for h in handles:
