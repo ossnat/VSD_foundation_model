@@ -10,7 +10,7 @@ processed_root: "Data/FoundationData/ProcessedData/splits"
 normalization_type: baseline_zscore
 baseline_frame: 20
 frame_start: 30
-frame_end: 150
+frame_end: 100
 clip_length: 1
 
 # Frame cropping: None (no crop), "square", or "circle"
@@ -31,7 +31,7 @@ window_size: 0  # 0 disables windowing; >0 uses non-overlapping windows (T per s
 
 # Task
 task: mae # mae | recon (plain autoencoder)
-mask_ratio: 0.5
+mask_ratio: 0.25
 patch_size: [1, 8, 8] # t, h, w
 
 
