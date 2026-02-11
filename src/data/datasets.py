@@ -26,7 +26,8 @@ class VsdVideoDataset(Dataset):
                  frame_end: Optional[int] = None,
                  clip_length: int = 1,
                  crop_frame: Optional[str] = None,  # None, "square", or "circle"
-                 crop_radius: Optional[float] = None  # 10-50, where 50 = full width/height
+                 crop_radius: Optional[float] = None,  # 10-50, where 50 = full width/height
+                 monkeys: Optional[List[str]] = None  # Optional subset of monkeys to include
                  ):
         """
         Args:
@@ -39,6 +40,8 @@ class VsdVideoDataset(Dataset):
             frame_start (int): Start frame index for slicing trials.
             frame_end (int): End frame index for slicing trials (if None, uses all frames).
             clip_length (int): Length of video clips to return (1 for single frames, >1 for clips).
+            monkeys (List[str], optional): List of monkey IDs/names to include. If None,
+                                           all monkeys in the split are used.
         """
         # Extract parameters from config if provided
         if cfg is not None:
@@ -53,6 +56,12 @@ class VsdVideoDataset(Dataset):
                 clip_length = 1
             crop_frame = cfg.get('crop_frame', crop_frame)
             crop_radius = cfg.get('crop_radius', crop_radius)
+            # Optional monkey filtering: can be a single string or list
+            cfg_monkeys = cfg.get('monkeys', monkeys)
+            if isinstance(cfg_monkeys, str):
+                monkeys = [cfg_monkeys]
+            else:
+                monkeys = cfg_monkeys
         # New CSV-based structure
         if split_csv_path is None:
             raise ValueError("split_csv_path must be provided for new data structure")
@@ -68,6 +77,7 @@ class VsdVideoDataset(Dataset):
         self.clip_length = int(clip_length) if clip_length is not None else 1
         self.crop_frame = crop_frame
         self.crop_radius = crop_radius
+        self.monkeys = monkeys
         
         # Validate crop parameters
         if self.crop_frame is not None:
@@ -138,10 +148,25 @@ class VsdVideoDataset(Dataset):
                            f"Found columns: {list(df.columns)}")
         
         # Filter by split
-        self.trials = df[df['split'] == split_name].copy().reset_index(drop=True)
+        self.trials = df[df['split'] == split_name].copy()
+
+        # Optionally filter by a subset of monkeys
+        if self.monkeys is not None:
+            if 'monkey' not in self.trials.columns:
+                raise ValueError("CSV does not contain 'monkey' column but 'monkeys' filter was provided.")
+            before_count = len(self.trials)
+            self.trials = self.trials[self.trials['monkey'].isin(self.monkeys)].copy()
+            self.trials.reset_index(drop=True, inplace=True)
+            after_count = len(self.trials)
+            print(f"Filtered trials by monkeys {self.monkeys}: {before_count} -> {after_count}")
         
         if len(self.trials) == 0:
-            raise ValueError(f"No trials found for split '{split_name}' in CSV file")
+            if self.monkeys is not None:
+                raise ValueError(
+                    f"No trials found for split '{split_name}' and monkeys {self.monkeys} in CSV file"
+                )
+            else:
+                raise ValueError(f"No trials found for split '{split_name}' in CSV file")
         
         print(f"Found {len(self.trials)} trials for split '{split_name}'")
 
@@ -244,15 +269,30 @@ class VsdVideoDataset(Dataset):
                 # Assume it's already parsed or use defaults
                 n_pixels = 10000
                 n_frames = 256
-            
-            # Compute frame range
+
+            # Determine last usable frame for this trial, taking shutter_off into account if available
+            last_valid_frame = n_frames - 1
+            if 'shutter_off' in self.trials.columns:
+                shutter_val = row.get('shutter_off', None)
+                if pd.notna(shutter_val):
+                    try:
+                        shutter_idx = int(shutter_val)
+                        # Frames at and after shutter_off are unusable, so last usable is shutter_idx - 1
+                        last_valid_frame = min(last_valid_frame, max(0, shutter_idx - 1))
+                    except (TypeError, ValueError):
+                        # If conversion fails, fall back to using all frames
+                        pass
+
+            # Compute frame range with global frame_start/frame_end but never beyond last_valid_frame
             start = max(0, self.frame_start)
-            end = (self.frame_end if self.frame_end is not None else n_frames - 1)
-            end = min(end, n_frames - 1)
+            end = (self.frame_end if self.frame_end is not None else last_valid_frame)
+            end = min(end, last_valid_frame)
             if end < start:
-                start, end = 0, n_frames - 1
+                # If global range is invalid for this trial, fall back to full valid range
+                start, end = 0, last_valid_frame
+
             effective_frames = end - start + 1
-            
+
             # Generate clips for this trial
             if self.clip_length > 0 and self.clip_length <= effective_frames:
                 num_clips = effective_frames // self.clip_length
@@ -300,14 +340,26 @@ class VsdVideoDataset(Dataset):
             if trial_dataset not in f:
                 raise ValueError(f"Dataset '{trial_dataset}' not found in file {target_file}")
             trial_data = f[trial_dataset][...]  # Shape: (n_pixels, n_frames)
-        
-        # Apply frame slicing
+
+        # Apply frame slicing, respecting shutter_off if present
         total_frames = trial_data.shape[1]
+
+        # Determine last usable frame for this trial (consistent with constructor logic)
+        last_valid_frame = total_frames - 1
+        if 'shutter_off' in self.trials.columns:
+            shutter_val = row.get('shutter_off', None)
+            if pd.notna(shutter_val):
+                try:
+                    shutter_idx = int(shutter_val)
+                    last_valid_frame = min(last_valid_frame, max(0, shutter_idx - 1))
+                except (TypeError, ValueError):
+                    pass
+
         start = max(0, self.frame_start)
-        end = (self.frame_end if self.frame_end is not None else total_frames - 1)
-        end = min(end, total_frames - 1)
+        end = (self.frame_end if self.frame_end is not None else last_valid_frame)
+        end = min(end, last_valid_frame)
         if end < start:
-            start, end = 0, total_frames - 1
+            start, end = 0, last_valid_frame
         
         if self.clip_length > 0 and (clip_start + self.clip_length <= end + 1):
             data_slice = trial_data[:, clip_start:clip_start + self.clip_length]
