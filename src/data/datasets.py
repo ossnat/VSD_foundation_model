@@ -147,8 +147,9 @@ class VsdVideoDataset(Dataset):
             raise ValueError(f"CSV file must contain columns: {required_columns}. Missing: {missing_columns}. "
                            f"Found columns: {list(df.columns)}")
         
-        # Filter by split
+        # Filter by split and reset index so iloc matches iterrows indices
         self.trials = df[df['split'] == split_name].copy()
+        self.trials.reset_index(drop=True, inplace=True)
 
         # Optionally filter by a subset of monkeys
         if self.monkeys is not None:
