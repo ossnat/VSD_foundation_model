@@ -1,0 +1,31 @@
+# ================================================
+# MAE 2D Model Configuration
+# ================================================
+# Architecture and loss settings only.
+# Training hyper-parameters  -> training_configs/
+# Data / loader parameters   -> data_configs/
+# ================================================
+
+experiment:
+  name: "mae_2d_vsd"
+  output_dir: "./outputs/mae_2d"
+
+model:
+  type: "2d"                   # 2d | 3d — selects backbone & decoder variant
+  system: "mae"                # System type: "mae" | "dino"
+
+  backbone:
+    name: "resnet18"
+    pretrained: false
+    projection_dim: null       # Not used in MAE
+
+  decoder:
+    in_channels: 512           # Must match backbone output (ResNet18 = 512)
+    out_channels: 1            # VSD single-channel imaging
+    hidden_dim: 256
+
+loss:
+  normalize: true              # Per-patch normalisation in MAE loss
+
+evaluation:
+  metrics: ["mse_masked", "mse_overall"]

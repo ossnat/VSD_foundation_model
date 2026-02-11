@@ -1,0 +1,38 @@
+# ================================================
+# MAE 2D Data Configuration
+# ================================================
+# Everything needed by load_dataset() and the
+# VsdMaskedDataset / VsdVideoDataset constructors.
+# Passed directly as the `cfg` dict — no nesting.
+# ================================================
+
+# --- Dataset identity ---
+dataset_name: vsd_mae          # Registry key: vsd_video | vsd_mae | vsd_dino
+
+# --- Data paths ---
+split_csv_path: "Data/FoundationData/ProcessedData/splits/split_v1_seed17_strat_monkey.csv"
+stats_json_path: "Data/FoundationData/ProcessedData/splits/baseline_stats_v1_seed17_strat_monkey.json"
+processed_root: "Data/FoundationData/ProcessedData/splits"
+
+# --- Frame / clip selection ---
+frame_start: 30               # First frame index to use (0-based)
+frame_end: 100                # Last frame index (inclusive); null = use all
+clip_length: 1                # Frames per sample (1 = single-frame / 2-D mode)
+
+# --- MAE masking ---
+mask_ratio: 0.25              # Fraction of patches to mask
+patch_size: [1, 8, 8]         # Patch dimensions (T, H, W)
+
+# --- Spatial cropping (optional) ---
+crop_frame: null              # null | "square" | "circle"
+crop_radius: null             # 10-50 (only used when crop_frame is set)
+
+# --- Monkey filtering (optional) ---
+# monkeys: null               # null = all monkeys; or list, e.g. ["boromir", "frodo"]
+
+# --- DataLoader ---
+batch_size: 256               # For TPU/Colab: use multiples of 8
+num_workers: 4
+pin_memory: true              # Faster GPU transfer
+persistent_workers: true      # Keep workers alive between epochs
+prefetch_factor: 2            # Batches to prefetch per worker

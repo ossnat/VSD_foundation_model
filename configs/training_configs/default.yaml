@@ -1,0 +1,30 @@
+# ================================================
+# Default Training Configuration
+# ================================================
+# Everything needed by the Trainer class.
+# Passed directly as the `cfg` dict — no nesting.
+# ================================================
+
+# --- Optimizer (AdamW) ---
+lr: 1.0e-4                    # Learning rate
+weight_decay: 0.05            # AdamW weight decay
+
+# --- Training loop ---
+epochs: 100                   # Total training epochs
+max_grad_norm: 1.0            # Gradient clipping (0.0 = disabled)
+
+# --- Learning-rate scheduler ---
+warmup_epochs: 10             # Linear warmup epochs
+scheduler_type: cosine        # Scheduler after warmup: "cosine"
+min_lr: 1.0e-6               # Minimum LR at end of cosine schedule
+
+# --- Checkpointing ---
+ckpt_dir: ./checkpoints       # Directory for saving model checkpoints
+save_every: 10                # Save checkpoint every N epochs
+
+# --- Logging ---
+log_dir: logs                 # TensorBoard / logger output directory
+eval_every: 5                 # Run validation every N epochs
+
+# --- Reproducibility ---
+seed: 17
