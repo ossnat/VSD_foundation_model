@@ -12,7 +12,7 @@ baseline_frame: 20
 frame_start: 30
 frame_end: 100
 clip_length: 1
-monkeys: "boromir" # op.2: ["tolkin", "frodo"]
+# monkeys: "boromir" # op.2: ["tolkin", "frodo"]
 
 # Frame cropping: None (no crop), "square", or "circle"
 # crop_radius: 10-50, where 50 = full width/height (100 pixels)
