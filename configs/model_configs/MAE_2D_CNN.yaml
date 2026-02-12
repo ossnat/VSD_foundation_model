@@ -1,0 +1,19 @@
+# ================================================
+# MAE 2D Model Configuration — Shallow CNN backbone
+# ================================================
+# Architecture and loss settings only.
+# Training hyper-parameters  -> training_configs/
+# Data / loader parameters   -> data_configs/
+# ================================================
+
+# --- Model identity ---
+model: mae_2d                  # Model type selector used by build_ssl_model
+backbone: MAEShallowCNNBackbone  # Backbone: "resnet18" | "MAEShallowCNNBackbone"
+pretrained: false              # Not used by this backbone (ignored)
+
+# --- Architecture ---
+channels: 1                   # Input / output channels (VSD = 1)
+hidden_dim: 256               # Decoder hidden dimension
+
+# --- Loss ---
+normalize_loss: true           # Per-patch normalisation in MAE loss

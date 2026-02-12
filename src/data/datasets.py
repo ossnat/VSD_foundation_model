@@ -147,8 +147,9 @@ class VsdVideoDataset(Dataset):
             raise ValueError(f"CSV file must contain columns: {required_columns}. Missing: {missing_columns}. "
                            f"Found columns: {list(df.columns)}")
         
-        # Filter by split
+        # Filter by split and reset index so iloc matches iterrows indices
         self.trials = df[df['split'] == split_name].copy()
+        self.trials.reset_index(drop=True, inplace=True)
 
         # Optionally filter by a subset of monkeys
         if self.monkeys is not None:
@@ -255,8 +256,9 @@ class VsdVideoDataset(Dataset):
         # Build data structure: list of (row_index, clip_start_frame)
         self.data_structure: List[Tuple[int, int]] = []
         
-        # Process each trial row
-        for row_idx, row in self.trials.iterrows():
+        # Process each trial row using positional index (iloc-compatible)
+        for pos_idx in range(len(self.trials)):
+            row = self.trials.iloc[pos_idx]
             # Parse shape from CSV: "(10000, 256)" -> n_pixels=10000, n_frames=256
             shape_str = row['shape']
             if isinstance(shape_str, str):
@@ -298,10 +300,10 @@ class VsdVideoDataset(Dataset):
                 num_clips = effective_frames // self.clip_length
                 for clip_idx in range(num_clips):
                     clip_start_frame = start + (clip_idx * self.clip_length)
-                    self.data_structure.append((row_idx, clip_start_frame))
+                    self.data_structure.append((pos_idx, clip_start_frame))
             else:
                 # Single clip for entire range
-                self.data_structure.append((row_idx, start))
+                self.data_structure.append((pos_idx, start))
 
         self.total_samples = len(self.data_structure)
         print(f"Created {self.total_samples} samples from {len(self.trials)} trials")
