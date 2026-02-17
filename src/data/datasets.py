@@ -27,7 +27,8 @@ class VsdVideoDataset(Dataset):
                  clip_length: int = 1,
                  crop_frame: Optional[str] = None,  # None, "square", or "circle"
                  crop_radius: Optional[float] = None,  # 10-50, where 50 = full width/height
-                 monkeys: Optional[List[str]] = None  # Optional subset of monkeys to include
+                 monkeys: Optional[List[str]] = None,  # Optional subset of monkeys to include
+                 frame_stride: int = 1  # Take every Nth clip (1 = all, 3 = every 3rd)
                  ):
         """
         Args:
@@ -42,6 +43,9 @@ class VsdVideoDataset(Dataset):
             clip_length (int): Length of video clips to return (1 for single frames, >1 for clips).
             monkeys (List[str], optional): List of monkey IDs/names to include. If None,
                                            all monkeys in the split are used.
+            frame_stride (int): Take every Nth clip per trial. Useful for speeding up
+                                validation by skipping redundant temporally-adjacent frames.
+                                Default 1 (no skipping). E.g. 3 = keep every 3rd clip.
         """
         # Extract parameters from config if provided
         if cfg is not None:
@@ -56,6 +60,7 @@ class VsdVideoDataset(Dataset):
                 clip_length = 1
             crop_frame = cfg.get('crop_frame', crop_frame)
             crop_radius = cfg.get('crop_radius', crop_radius)
+            frame_stride = cfg.get('frame_stride', frame_stride)
             # Optional monkey filtering: can be a single string or list
             cfg_monkeys = cfg.get('monkeys', monkeys)
             if isinstance(cfg_monkeys, str):
@@ -78,6 +83,7 @@ class VsdVideoDataset(Dataset):
         self.crop_frame = crop_frame
         self.crop_radius = crop_radius
         self.monkeys = monkeys
+        self.frame_stride = max(1, int(frame_stride))
         
         # Validate crop parameters
         if self.crop_frame is not None:
@@ -295,10 +301,10 @@ class VsdVideoDataset(Dataset):
 
             effective_frames = end - start + 1
 
-            # Generate clips for this trial
+            # Generate clips for this trial (respecting frame_stride)
             if self.clip_length > 0 and self.clip_length <= effective_frames:
                 num_clips = effective_frames // self.clip_length
-                for clip_idx in range(num_clips):
+                for clip_idx in range(0, num_clips, self.frame_stride):
                     clip_start_frame = start + (clip_idx * self.clip_length)
                     self.data_structure.append((pos_idx, clip_start_frame))
             else:
@@ -306,7 +312,8 @@ class VsdVideoDataset(Dataset):
                 self.data_structure.append((pos_idx, start))
 
         self.total_samples = len(self.data_structure)
-        print(f"Created {self.total_samples} samples from {len(self.trials)} trials")
+        stride_info = f" (frame_stride={self.frame_stride})" if self.frame_stride > 1 else ""
+        print(f"Created {self.total_samples} samples from {len(self.trials)} trials{stride_info}")
 
     def __len__(self) -> int:
         """

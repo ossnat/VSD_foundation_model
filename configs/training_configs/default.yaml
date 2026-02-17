@@ -24,7 +24,8 @@ save_every: 10                # Save checkpoint every N epochs
 
 # --- Logging ---
 log_dir: logs                 # TensorBoard / logger output directory
-eval_every: 5                 # Run validation every N epochs
+eval_every: 5                 # Run validation every N epochs (used when val_every_n_steps is null)
+val_every_n_steps: 200       # Validate every N training steps (null = validate at end of epoch only)
 
 # --- Reproducibility ---
 seed: 17

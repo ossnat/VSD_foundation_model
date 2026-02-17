@@ -58,6 +58,14 @@ def load_dataset(cfg: Dict[str, Any],
     # Remove None values
     dataset_kwargs = {k: v for k, v in dataset_kwargs.items() if v is not None}
     
+    # Apply frame_stride for val/test splits (speeds up validation)
+    if split in ('val', 'test'):
+        frame_stride = cfg.get('val_frame_stride', 1)
+    else:
+        frame_stride = cfg.get('frame_stride', 1)
+    if frame_stride > 1:
+        dataset_kwargs['frame_stride'] = frame_stride
+
     # Add any additional dataset-specific parameters
     if dataset_name == 'vsd_mae':
         dataset_kwargs['mask_ratio'] = cfg.get('mask_ratio', 0.75)

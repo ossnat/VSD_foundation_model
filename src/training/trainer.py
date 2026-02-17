@@ -34,6 +34,7 @@ class Trainer:
         fig = None
         ax = None
         line = None
+        val_every_n_steps = self.cfg.get("val_every_n_steps", None)
 
         if self.plot_loss and plt is None:
             print("Plotting disabled: matplotlib is not available.")
@@ -62,20 +63,33 @@ class Trainer:
                     fig, ax, line = self._update_loss_plot(plot_steps, plot_losses, fig, ax, line)
                 global_step += 1
 
-            # Validation (optional)
-            if val_loader is not None:
-                self.model.eval()
-                with torch.no_grad():
-                    val_losses = []
-                    for batch in val_loader:
-                        val_loss = self._forward_and_loss(batch)
-                        val_losses.append(float(val_loss.item()))
-                    if val_losses:
-                        self.logger.log_scalar("val/loss", sum(val_losses)/len(val_losses), epoch)
+                # Mid-epoch validation every N steps
+                if (val_every_n_steps and val_loader is not None
+                        and global_step % val_every_n_steps == 0):
+                    self._validate(val_loader, global_step)
+                    self.model.train()
+
+            # End-of-epoch validation (skip if mid-epoch validation already covers it)
+            if val_loader is not None and not val_every_n_steps:
+                self._validate(val_loader, global_step)
 
             # Save checkpoint each epoch
             ckpt_path = os.path.join(self.cfg.get("ckpt_dir","checkpoints"), f"epoch_{epoch+1}.pt")
             torch.save(self.model.state_dict(), ckpt_path)
+
+    def _validate(self, val_loader, step):
+        """Run a full validation pass and log the average loss."""
+        self.model.eval()
+        val_losses = []
+        with torch.no_grad():
+            for batch in val_loader:
+                val_loss = self._forward_and_loss(batch)
+                val_losses.append(float(val_loss.item()))
+        if val_losses:
+            avg_val_loss = sum(val_losses) / len(val_losses)
+            self.logger.log_scalar("val/loss", avg_val_loss, step)
+            self.logger.flush()
+            print(f"  [step {step}] val/loss = {avg_val_loss:.6f}")
 
     def _forward_and_loss(self, batch):
         """Route batch to model depending on task/system.
