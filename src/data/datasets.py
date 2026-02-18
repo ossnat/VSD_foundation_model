@@ -62,6 +62,9 @@ class VsdVideoDataset(Dataset):
                 monkeys = [cfg_monkeys]
             else:
                 monkeys = cfg_monkeys
+        # Normalize monkeys to a list when passed as a single string (e.g. from config at runtime or via kwargs)
+        if monkeys is not None and isinstance(monkeys, str):
+            monkeys = [monkeys]
         # New CSV-based structure
         if split_csv_path is None:
             raise ValueError("split_csv_path must be provided for new data structure")
