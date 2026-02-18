@@ -323,10 +323,8 @@ class VsdVideoDataset(Dataset):
             self._trial_cache = []
             for pos_idx in range(len(self.trials)):
                 row = self.trials.iloc[pos_idx]
-                target_file = row['target_file']
+                target_file = self._resolve_target_file(row['target_file'])
                 trial_dataset = row['trial_dataset']
-                if self.processed_root is not None and not Path(target_file).is_absolute():
-                    target_file = str(Path(self.processed_root) / target_file)
                 with h5py.File(target_file, 'r') as f:
                     if trial_dataset not in f:
                         raise ValueError(f"Dataset '{trial_dataset}' not found in file {target_file}")
@@ -350,6 +348,29 @@ class VsdVideoDataset(Dataset):
         self._std_gpu = self.std.to(device)
         print(f"Pinned {len(self._gpu_trial_cache)} trials and stats to {device}.")
 
+    def _resolve_target_file(self, target_file: str) -> str:
+        """
+        Resolve target_file to an absolute path. If it's relative:
+        - Paths starting with 'Data/' are relative to the parent of the Data directory
+          (so CSV paths like Data/FoundationData/ProcessedData/legolas/... resolve correctly).
+        - Other relative paths are relative to processed_root's parent (ProcessedData folder).
+        """
+        path = Path(target_file)
+        if path.is_absolute():
+            return target_file
+        if self.processed_root is None:
+            return target_file
+        root = Path(self.processed_root).resolve()
+        # If target_file starts with "Data/", resolve relative to parent of "Data"
+        if target_file.strip().startswith("Data/") or target_file.strip().startswith("Data\\"):
+            while root.name != "Data" and root != root.parent:
+                root = root.parent
+            if root.name == "Data":
+                root = root.parent
+            return str((root / path).resolve())
+        # Otherwise relative to processed_root's parent (e.g. .../ProcessedData)
+        return str((root.parent / path).resolve())
+
     def __len__(self) -> int:
         """
         Returns the total number of samples in the dataset.
@@ -362,10 +383,8 @@ class VsdVideoDataset(Dataset):
         row = self.trials.iloc[row_idx]
         
         # Get file path and dataset name
-        target_file = row['target_file']
+        target_file = self._resolve_target_file(row['target_file'])
         trial_dataset = row['trial_dataset']
-        if self.processed_root is not None and not Path(target_file).is_absolute():
-            target_file = str(Path(self.processed_root) / target_file)
 
         # Parse shape from CSV
         shape_str = row['shape']
