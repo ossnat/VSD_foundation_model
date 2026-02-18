@@ -10,6 +10,7 @@ import json
 import math
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
+from tqdm import tqdm
 
 
 # Define the VsdVideoDataset class within this file or ensure it's imported
@@ -320,7 +321,7 @@ class VsdVideoDataset(Dataset):
         # Optionally preload all trial data into CPU RAM (one array per trial)
         if self.preload_into_ram:
             self._trial_cache = []
-            for pos_idx in range(len(self.trials)):
+            for pos_idx in tqdm(range(len(self.trials)), desc="Preloading trials into CPU RAM", unit="trial"):
                 row = self.trials.iloc[pos_idx]
                 target_file = row['target_file']
                 trial_dataset = row['trial_dataset']
