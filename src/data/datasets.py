@@ -324,6 +324,7 @@ class VsdVideoDataset(Dataset):
             for pos_idx in range(len(self.trials)):
                 row = self.trials.iloc[pos_idx]
                 target_file = self._resolve_target_file(row['target_file'])
+                target_file = self._fix_duplicated_data_path(target_file)
                 trial_dataset = row['trial_dataset']
                 with h5py.File(target_file, 'r') as f:
                     if trial_dataset not in f:
@@ -388,6 +389,22 @@ class VsdVideoDataset(Dataset):
         # Otherwise relative to processed_root's parent (e.g. .../ProcessedData)
         return str((root.parent / path).resolve())
 
+    def _fix_duplicated_data_path(self, path: str) -> str:
+        """
+        Fix path that was wrongly built as processed_root + target_file, e.g.:
+        Data/FoundationData/ProcessedData/splits/Data/FoundationData/ProcessedData/legolas/...
+        -> Data/FoundationData/ProcessedData/legolas/...
+        Call this right before opening any HDF5 file so the fix is applied regardless of code path.
+        """
+        if not path or path.isspace():
+            return path
+        raw = path.strip()
+        if "/splits/Data/" in raw:
+            raw = "Data/" + raw.split("/splits/Data/")[-1]
+        if "\\splits\\Data\\" in raw:
+            raw = "Data\\" + raw.split("\\splits\\Data\\")[-1]
+        return raw
+
     def __len__(self) -> int:
         """
         Returns the total number of samples in the dataset.
@@ -423,6 +440,7 @@ class VsdVideoDataset(Dataset):
         elif self._trial_cache is not None:
             trial_data = self._trial_cache[row_idx]  # (n_pixels, n_frames) numpy
         else:
+            target_file = self._fix_duplicated_data_path(target_file)
             with h5py.File(target_file, 'r') as f:
                 if trial_dataset not in f:
                     raise ValueError(f"Dataset '{trial_dataset}' not found in file {target_file}")
