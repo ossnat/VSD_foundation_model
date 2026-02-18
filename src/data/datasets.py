@@ -81,6 +81,7 @@ class VsdVideoDataset(Dataset):
         self.crop_frame = crop_frame
         self.crop_radius = crop_radius
         self.monkeys = monkeys
+        print(f"[dataset] monkeys filter received: {self.monkeys!r} (None = use all monkeys)")
         
         # Validate crop parameters
         if self.crop_frame is not None:

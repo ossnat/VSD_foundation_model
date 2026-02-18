@@ -61,6 +61,9 @@ def load_dataset(cfg: Dict[str, Any],
 
     # Remove None values so dataset can use its defaults (keep preload_into_ram since it has a default)
     dataset_kwargs = {k: v for k, v in dataset_kwargs.items() if v is not None}
+    # Debug: track monkeys from config
+    print(f"[data_loader] monkeys from config (cfg.get('monkeys')): {cfg.get('monkeys')!r}")
+    print(f"[data_loader] monkeys passed to dataset (after dropping None): {dataset_kwargs.get('monkeys')!r}")
     
     # Add any additional dataset-specific parameters
     if dataset_name == 'vsd_mae':
