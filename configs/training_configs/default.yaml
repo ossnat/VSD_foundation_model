@@ -26,5 +26,8 @@ save_every: 10                # Save checkpoint every N epochs
 log_dir: logs                 # TensorBoard / logger output directory
 eval_every: 5                 # Run validation every N epochs
 
+# --- Data loading (speed) ---
+preload_into_ram: True         # Load all trial data into CPU RAM at init (faster; default true)
+
 # --- Reproducibility ---
 seed: 17

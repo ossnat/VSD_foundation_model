@@ -56,6 +56,7 @@ def load_dataset(cfg: Dict[str, Any],
         'crop_frame': cfg.get('crop_frame'),
         'crop_radius': cfg.get('crop_radius'),
         'monkeys': cfg.get('monkeys'),
+        'preload_into_ram': cfg.get('preload_into_ram', True),
     }
 
     # Remove None values so dataset can use its defaults
