@@ -357,12 +357,31 @@ class VsdVideoDataset(Dataset):
         - Other relative paths are relative to processed_root's parent (ProcessedData folder).
         """
         raw = target_file.strip()
-        path = Path(target_file)
+        # Fix already-concatenated path: .../splits/Data/FoundationData/... -> Data/FoundationData/...
+        if "/splits/Data/" in raw:
+            raw = "Data/" + raw.split("/splits/Data/")[-1]
+        if "\\splits\\Data\\" in raw:
+            raw = "Data\\" + raw.split("\\splits\\Data\\")[-1]
+        path = Path(raw)
         if path.is_absolute():
-            return target_file
-        # Paths starting with "Data/" are relative to cwd (project root on Colab/local)
+            return raw
+        # Paths starting with "Data/" are relative to cwd (project root) OR /content/Data (Colab)
+        # NEVER use processed_root for these paths to avoid duplication
         if raw.startswith("Data/") or raw.startswith("Data\\"):
-            return str(path.resolve())
+            import os
+            cwd = Path(os.getcwd())
+            # Try project root first (cwd/Data/...)
+            resolved_cwd = (cwd / path).resolve()
+            # Also try /content/Data/... (Colab case where data is copied to /content/Data)
+            resolved_colab = Path("/content") / path
+            # Use whichever exists, or prefer Colab path if both exist (Colab is explicit)
+            if resolved_colab.exists():
+                return str(resolved_colab.resolve())
+            elif resolved_cwd.exists():
+                return str(resolved_cwd)
+            else:
+                # Neither exists - return Colab path as default (user likely copied data there)
+                return str(resolved_colab.resolve())
         if self.processed_root is None:
             return target_file
         root = Path(self.processed_root).resolve()
