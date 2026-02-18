@@ -85,6 +85,9 @@ class VsdVideoDataset(Dataset):
         self.monkeys = monkeys
         self.preload_into_ram = preload_into_ram
         self._trial_cache: Optional[List[np.ndarray]] = None  # Filled if preload_into_ram=True
+        self._gpu_trial_cache: Optional[List[torch.Tensor]] = None  # Filled by pin_to_gpu()
+        self._mean_gpu: Optional[torch.Tensor] = None  # mean on GPU when pinned
+        self._std_gpu: Optional[torch.Tensor] = None   # std on GPU when pinned
 
         # Validate crop parameters
         if self.crop_frame is not None:
@@ -330,6 +333,23 @@ class VsdVideoDataset(Dataset):
                     self._trial_cache.append(np.array(f[trial_dataset][...], dtype=np.float32))
             print(f"Preloaded {len(self._trial_cache)} trials into RAM.")
 
+    def pin_to_gpu(self, device: torch.device) -> None:
+        """
+        Copy preloaded trial data and normalization stats to GPU.
+        Call after construction when preload_into_ram=True and you want
+        __getitem__ to return tensors already on device (no per-batch transfer).
+        Use DataLoader with num_workers=0 when using this.
+        """
+        if self._trial_cache is None:
+            raise RuntimeError("pin_to_gpu requires preload_into_ram=True")
+        self._gpu_trial_cache = [
+            torch.from_numpy(arr).to(device, dtype=torch.float32)
+            for arr in self._trial_cache
+        ]
+        self._mean_gpu = self.mean.to(device)
+        self._std_gpu = self.std.to(device)
+        print(f"Pinned {len(self._gpu_trial_cache)} trials and stats to {device}.")
+
     def __len__(self) -> int:
         """
         Returns the total number of samples in the dataset.
@@ -361,9 +381,11 @@ class VsdVideoDataset(Dataset):
         # Compute spatial dimensions from n_pixels
         height = width = int(math.sqrt(n_pixels))
 
-        # Use RAM cache if available, otherwise read from HDF5
-        if self._trial_cache is not None:
-            trial_data = self._trial_cache[row_idx]  # (n_pixels, n_frames)
+        # Use GPU cache, RAM cache, or read from HDF5
+        if self._gpu_trial_cache is not None:
+            trial_data = self._gpu_trial_cache[row_idx]  # (n_pixels, n_frames) on GPU
+        elif self._trial_cache is not None:
+            trial_data = self._trial_cache[row_idx]  # (n_pixels, n_frames) numpy
         else:
             with h5py.File(target_file, 'r') as f:
                 if trial_dataset not in f:
@@ -399,13 +421,16 @@ class VsdVideoDataset(Dataset):
             data_slice = trial_data[:, start:end + 1]
             abs_start_frame = start
             abs_end_frame = end
-        
-        # Reshape from (n_pixels, frames) to (height, width, frames)
+
+        # Reshape from (n_pixels, frames) to (height, width, frames) and to (1, frames, height, width)
         frames = data_slice.shape[1]
-        reshaped_data = data_slice.reshape(height, width, frames)
-        
-        # Convert to tensor and permute to (1, frames, height, width)
-        tensor_data = torch.from_numpy(reshaped_data).unsqueeze(0).permute(0, 3, 1, 2).float()
+        on_gpu = isinstance(data_slice, torch.Tensor)
+        if on_gpu:
+            reshaped_data = data_slice.reshape(height, width, frames)
+            tensor_data = reshaped_data.unsqueeze(0).permute(0, 3, 1, 2).float()
+        else:
+            reshaped_data = data_slice.reshape(height, width, frames)
+            tensor_data = torch.from_numpy(reshaped_data).unsqueeze(0).permute(0, 3, 1, 2).float()
         
         # Store original dimensions for normalization stats cropping
         orig_height, orig_width = height, width
@@ -442,9 +467,11 @@ class VsdVideoDataset(Dataset):
         else:
             crop_height, crop_width = height, width
         
-        # Crop normalization stats to match cropped tensor size
-        mean_cropped = self._crop_normalization_stats(self.mean, orig_height, orig_width, crop_height, crop_width)
-        std_cropped = self._crop_normalization_stats(self.std, orig_height, orig_width, crop_height, crop_width)
+        # Crop normalization stats to match cropped tensor size (use GPU stats if pinned)
+        mean_src = self._mean_gpu if self._mean_gpu is not None else self.mean
+        std_src = self._std_gpu if self._std_gpu is not None else self.std
+        mean_cropped = self._crop_normalization_stats(mean_src, orig_height, orig_width, crop_height, crop_width)
+        std_cropped = self._crop_normalization_stats(std_src, orig_height, orig_width, crop_height, crop_width)
         
         # Apply z-score normalization using precomputed stats (cropped to match)
         tensor_data = (tensor_data - mean_cropped) / (std_cropped + self.epsilon)
@@ -455,8 +482,12 @@ class VsdVideoDataset(Dataset):
         
         # Impute any NaN/Inf values before returning
         tensor_data = self._impute_non_finite(tensor_data)
-        
-        mask_tensor = torch.zeros(1, frames, crop_height, crop_width, dtype=torch.float32)
+
+        mask_tensor = torch.zeros(
+            1, frames, crop_height, crop_width,
+            dtype=torch.float32,
+            device=tensor_data.device if tensor_data.is_cuda else None,
+        )
         
         return {
             "video": tensor_data,

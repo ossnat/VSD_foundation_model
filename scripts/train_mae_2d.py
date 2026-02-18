@@ -654,11 +654,22 @@ def train_mae_2d_from_config(config_path=None, cfg=None, epochs=None,
     test_dataset_full = load_dataset(cfg, split="test", batch_size=1, num_workers=4, shuffle=False).dataset
     
     print(f"  Dataset sizes: train={len(train_dataset_full)}, val={len(val_dataset_full)}, test={len(test_dataset_full)}")
+
+    # Optionally pin preloaded data to GPU (no per-batch CPU->GPU transfer; use num_workers=0)
+    preload_to_gpu = cfg.get("preload_to_gpu", False)
+    if preload_to_gpu and hasattr(train_dataset_full, "pin_to_gpu"):
+        train_dataset_full.pin_to_gpu(device)
+        val_dataset_full.pin_to_gpu(device)
+        test_dataset_full.pin_to_gpu(device)
+        num_workers_for_loader = 0
+        print("  Using num_workers=0 because data is on GPU.")
+    else:
+        num_workers_for_loader = cfg.get("num_workers", 4)
     
     # Create DataLoaders with optimizations for Colab/TPU
     batch_size = cfg.get("batch_size", 256)  # Default to 256 for TPU efficiency (multiple of 8)
-    num_workers = cfg.get("num_workers", 4)
-    pin_memory = cfg.get("pin_memory", True)  # Faster GPU transfer
+    num_workers = num_workers_for_loader
+    pin_memory = cfg.get("pin_memory", True)  # Faster GPU transfer (ignored when data already on GPU)
     persistent_workers = cfg.get("persistent_workers", True)  # Keep workers alive between epochs
     prefetch_factor = cfg.get("prefetch_factor", 2)  # Prefetch batches
     
