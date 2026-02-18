@@ -351,23 +351,21 @@ class VsdVideoDataset(Dataset):
     def _resolve_target_file(self, target_file: str) -> str:
         """
         Resolve target_file to an absolute path. If it's relative:
-        - Paths starting with 'Data/' are relative to the parent of the Data directory
-          (so CSV paths like Data/FoundationData/ProcessedData/legolas/... resolve correctly).
+        - Paths starting with 'Data/' are resolved relative to the current working
+          directory (so run from project root where Data/ exists). We never prepend
+          processed_root to these, to avoid .../splits/Data/... duplication.
         - Other relative paths are relative to processed_root's parent (ProcessedData folder).
         """
+        raw = target_file.strip()
         path = Path(target_file)
         if path.is_absolute():
             return target_file
+        # Paths starting with "Data/" are relative to cwd (project root on Colab/local)
+        if raw.startswith("Data/") or raw.startswith("Data\\"):
+            return str(path.resolve())
         if self.processed_root is None:
             return target_file
         root = Path(self.processed_root).resolve()
-        # If target_file starts with "Data/", resolve relative to parent of "Data"
-        if target_file.strip().startswith("Data/") or target_file.strip().startswith("Data\\"):
-            while root.name != "Data" and root != root.parent:
-                root = root.parent
-            if root.name == "Data":
-                root = root.parent
-            return str((root / path).resolve())
         # Otherwise relative to processed_root's parent (e.g. .../ProcessedData)
         return str((root.parent / path).resolve())
 
