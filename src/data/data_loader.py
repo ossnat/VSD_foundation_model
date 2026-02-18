@@ -53,10 +53,17 @@ def load_dataset(cfg: Dict[str, Any],
         'frame_start': cfg.get('frame_start', 1),
         'frame_end': cfg.get('frame_end', None),
         'clip_length': cfg.get('clip_length', 1),
+        'crop_frame': cfg.get('crop_frame'),
+        'crop_radius': cfg.get('crop_radius'),
+        'monkeys': cfg.get('monkeys'),
+        'preload_into_ram': cfg.get('preload_into_ram', True),
     }
 
-    # Remove None values
+    # Remove None values so dataset can use its defaults
     dataset_kwargs = {k: v for k, v in dataset_kwargs.items() if v is not None}
+    # Debug: track monkeys from config
+    print(f"[data_loader] monkeys from config (cfg.get('monkeys')): {cfg.get('monkeys')!r}")
+    print(f"[data_loader] monkeys passed to dataset (after dropping None): {dataset_kwargs.get('monkeys')!r}")
     
     # Add any additional dataset-specific parameters
     if dataset_name == 'vsd_mae':

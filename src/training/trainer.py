@@ -22,7 +22,11 @@ class Trainer:
         self.device = device
         self.plot_loss = plot_loss
         self.debug_train = debug_train
-        self.opt = AdamW(model.parameters(), lr=cfg["lr"], weight_decay=cfg["weight_decay"])
+        self.opt = AdamW(
+            model.parameters(),
+            lr=cfg.get("lr", 1e-4),
+            weight_decay=cfg.get("weight_decay", 0.05),
+        )
         self.scaler = GradScaler()
         os.makedirs(cfg.get("ckpt_dir", "checkpoints"), exist_ok=True)
 
@@ -38,9 +42,10 @@ class Trainer:
         if self.plot_loss and plt is None:
             print("Plotting disabled: matplotlib is not available.")
             self.plot_loss = False
-        for epoch in range(self.cfg["epochs"]):
+        epochs = self.cfg.get("epochs", 10)
+        for epoch in range(epochs):
             self.model.train()
-            pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{self.cfg['epochs']}")
+            pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")
             for batch in pbar:
                 self.opt.zero_grad()
                 with autocast():
