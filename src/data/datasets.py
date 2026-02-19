@@ -46,7 +46,7 @@ class VsdVideoDataset(Dataset):
                                            all monkeys in the split are used.
             preload_into_ram (bool): If True, load all trial HDF5 data into RAM during __init__.
         """
-        # Extract parameters from config if provided
+        # Extract parameters from config if provided #
         if cfg is not None:
             split_csv_path = cfg.get('split_csv_path', split_csv_path)
             split_name = cfg.get('split_name', split_name)
