@@ -34,7 +34,10 @@ class Trainer:
         fig = None
         ax = None
         line = None
-        val_every_n_steps = self.cfg.get("val_every_n_steps", None)
+
+        # Validation schedule: "epoch" (default) or "step"
+        val_mode = self.cfg.get("val_mode", "epoch")
+        val_every = self.cfg.get("val_every", 1)
 
         if self.plot_loss and plt is None:
             print("Plotting disabled: matplotlib is not available.")
@@ -63,14 +66,15 @@ class Trainer:
                     fig, ax, line = self._update_loss_plot(plot_steps, plot_losses, fig, ax, line)
                 global_step += 1
 
-                # Mid-epoch validation every N steps
-                if (val_every_n_steps and val_loader is not None
-                        and global_step % val_every_n_steps == 0):
+                # Step-wise validation
+                if (val_mode == "step" and val_loader is not None
+                        and global_step % val_every == 0):
                     self._validate(val_loader, global_step)
                     self.model.train()
 
-            # End-of-epoch validation (skip if mid-epoch validation already covers it)
-            if val_loader is not None and not val_every_n_steps:
+            # Epoch-wise validation
+            if (val_mode == "epoch" and val_loader is not None
+                    and (epoch + 1) % val_every == 0):
                 self._validate(val_loader, global_step)
 
             # Save checkpoint each epoch
