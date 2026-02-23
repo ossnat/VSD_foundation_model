@@ -29,5 +29,8 @@ log_dir: logs                 # TensorBoard / logger output directory
 val_mode: epoch               # "epoch" = validate every N epochs, "step" = validate every N steps
 val_every: 5                  # Frequency: every N epochs (val_mode=epoch) or N steps (val_mode=step)
 
+# --- Data loading (speed) ---
+preload_into_ram: True         # Load all trial data into CPU RAM at init (faster; default true)
+
 # --- Reproducibility ---
 seed: 17

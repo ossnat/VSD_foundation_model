@@ -10,6 +10,7 @@ import json
 import math
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, List
+from tqdm import tqdm
 
 
 # Define the VsdVideoDataset class within this file or ensure it's imported
@@ -29,6 +30,7 @@ class VsdVideoDataset(Dataset):
                  crop_radius: Optional[float] = None,  # 10-50, where 50 = full width/height
                  monkeys: Optional[List[str]] = None,  # Optional subset of monkeys to include
                  frame_stride: int = 1  # Take every Nth clip (1 = all, 3 = every 3rd)
+                 preload_into_ram: bool = True,  # Load all trial data into CPU RAM at init (faster)
                  ):
         """
         Args:
@@ -46,6 +48,7 @@ class VsdVideoDataset(Dataset):
             frame_stride (int): Take every Nth clip per trial. Useful for speeding up
                                 validation by skipping redundant temporally-adjacent frames.
                                 Default 1 (no skipping). E.g. 3 = keep every 3rd clip.
+            preload_into_ram (bool): If True, load all trial HDF5 data into RAM during __init__.
         """
         # Extract parameters from config if provided
         if cfg is not None:
@@ -67,6 +70,10 @@ class VsdVideoDataset(Dataset):
                 monkeys = [cfg_monkeys]
             else:
                 monkeys = cfg_monkeys
+            preload_into_ram = cfg.get('preload_into_ram', preload_into_ram)
+        # Normalize monkeys to a list when passed as a single string (e.g. from config at runtime or via kwargs)
+        if monkeys is not None and isinstance(monkeys, str):
+            monkeys = [monkeys]
         # New CSV-based structure
         if split_csv_path is None:
             raise ValueError("split_csv_path must be provided for new data structure")
@@ -84,6 +91,9 @@ class VsdVideoDataset(Dataset):
         self.crop_radius = crop_radius
         self.monkeys = monkeys
         self.frame_stride = max(1, int(frame_stride))
+        self.preload_into_ram = preload_into_ram
+        self._trial_cache: Optional[List[np.ndarray]] = None  # Filled if preload_into_ram=True
+        print(f"[dataset] monkeys filter received: {self.monkeys!r} (None = use all monkeys)")
         
         # Validate crop parameters
         if self.crop_frame is not None:
@@ -315,6 +325,19 @@ class VsdVideoDataset(Dataset):
         stride_info = f" (frame_stride={self.frame_stride})" if self.frame_stride > 1 else ""
         print(f"Created {self.total_samples} samples from {len(self.trials)} trials{stride_info}")
 
+        # Optionally preload all trial data into CPU RAM (one array per trial)
+        if self.preload_into_ram:
+            self._trial_cache = []
+            for pos_idx in tqdm(range(len(self.trials)), desc="Preloading trials into CPU RAM", unit="trial"):
+                row = self.trials.iloc[pos_idx]
+                target_file = row['target_file']
+                trial_dataset = row['trial_dataset']
+                with h5py.File(target_file, 'r') as f:
+                    if trial_dataset not in f:
+                        raise ValueError(f"Dataset '{trial_dataset}' not found in file {target_file}")
+                    self._trial_cache.append(np.array(f[trial_dataset][...], dtype=np.float32))
+            print(f"Preloaded {len(self._trial_cache)} trials into CPU RAM.")
+
     def __len__(self) -> int:
         """
         Returns the total number of samples in the dataset.
@@ -344,11 +367,14 @@ class VsdVideoDataset(Dataset):
         # Compute spatial dimensions from n_pixels
         height = width = int(math.sqrt(n_pixels))
         
-        # Open H5 file and read trial dataset
-        with h5py.File(target_file, 'r') as f:
-            if trial_dataset not in f:
-                raise ValueError(f"Dataset '{trial_dataset}' not found in file {target_file}")
-            trial_data = f[trial_dataset][...]  # Shape: (n_pixels, n_frames)
+        # Get trial data from RAM cache or from H5 file
+        if self._trial_cache is not None:
+            trial_data = self._trial_cache[row_idx]  # Shape: (n_pixels, n_frames)
+        else:
+            with h5py.File(target_file, 'r') as f:
+                if trial_dataset not in f:
+                    raise ValueError(f"Dataset '{trial_dataset}' not found in file {target_file}")
+                trial_data = f[trial_dataset][...]  # Shape: (n_pixels, n_frames)
 
         # Apply frame slicing, respecting shutter_off if present
         total_frames = trial_data.shape[1]
