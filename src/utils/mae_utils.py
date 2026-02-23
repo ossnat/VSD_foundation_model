@@ -244,7 +244,9 @@ def build_mae_2d_model(cfg, device):
             "weight_decay": cfg.get("weight_decay", 0.05)
         },
         "loss": {
-            "normalize": cfg.get("normalize_loss", True)
+            "normalize": cfg.get("normalize_loss", True),
+            "crop_loss": cfg.get("crop_loss", None),
+            "crop_loss_radius": cfg.get("crop_loss_radius", 30),
         }
     }
     
