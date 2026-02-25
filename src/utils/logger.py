@@ -16,6 +16,9 @@ class TBLogger:
     def log_scalar(self, name, value, step):
         self.w.add_scalar(name, value, step)
 
+    def flush(self):
+        self.w.flush()
+
 
 def set_seed(seed: int = 42):
     random.seed(seed)

@@ -65,6 +65,14 @@ def load_dataset(cfg: Dict[str, Any],
     print(f"[data_loader] monkeys from config (cfg.get('monkeys')): {cfg.get('monkeys')!r}")
     print(f"[data_loader] monkeys passed to dataset (after dropping None): {dataset_kwargs.get('monkeys')!r}")
     
+    # Apply frame_stride for val/test splits (speeds up validation)
+    if split in ('val', 'test'):
+        frame_stride = cfg.get('val_frame_stride', 1)
+    else:
+        frame_stride = cfg.get('frame_stride', 1)
+    if frame_stride > 1:
+        dataset_kwargs['frame_stride'] = frame_stride
+
     # Add any additional dataset-specific parameters
     if dataset_name == 'vsd_mae':
         dataset_kwargs['mask_ratio'] = cfg.get('mask_ratio', 0.75)

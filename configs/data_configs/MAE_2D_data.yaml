@@ -10,8 +10,8 @@
 dataset_name: vsd_mae          # Registry key: vsd_video | vsd_mae | vsd_dino
 
 # --- Data paths ---
-split_csv_path: "Data/FoundationData/ProcessedData/splits/split_v1_seed17_strat_monkey.csv"
-stats_json_path: "Data/FoundationData/ProcessedData/splits/baseline_stats_v1_seed17_strat_monkey.json"
+split_csv_path: "Data/FoundationData/ProcessedData/splits/split_v2_seed17_strat_monkey.csv"
+stats_json_path: "Data/FoundationData/ProcessedData/splits/baseline_stats_v2_seed17_strat_monkey.json"
 processed_root: "Data/FoundationData/ProcessedData/splits"
 
 # --- Frame / clip selection ---
@@ -29,6 +29,9 @@ crop_radius: null             # 10-50 (only used when crop_frame is set)
 
 # --- Monkey filtering (optional) ---
 # monkeys: null               # null = all monkeys; or list, e.g. ["boromir", "frodo"]
+
+# --- Validation speedup ---
+val_frame_stride: 3           # Take every Nth frame for val/test (1 = all frames, 3 = 3x faster)
 
 # --- DataLoader ---
 batch_size: 256               # For TPU/Colab: use multiples of 8
