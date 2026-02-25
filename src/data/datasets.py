@@ -29,7 +29,7 @@ class VsdVideoDataset(Dataset):
                  crop_frame: Optional[str] = None,  # None, "square", or "circle"
                  crop_radius: Optional[float] = None,  # 10-50, where 50 = full width/height
                  monkeys: Optional[List[str]] = None,  # Optional subset of monkeys to include
-                 frame_stride: int = 1  # Take every Nth clip (1 = all, 3 = every 3rd)
+                 frame_stride: int = 1,  # Take every Nth clip (1 = all, 3 = every 3rd)
                  preload_into_ram: bool = True,  # Load all trial data into CPU RAM at init (faster)
                  ):
         """
