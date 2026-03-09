@@ -1,4 +1,12 @@
 # src/models/heads/mae_decoder_3d.py
+"""
+MAE 3D Decoder — Same idea as 2D but with ConvTranspose3d.
+
+- ConvTranspose3d upsamples in (T, H, W): one layer with stride (2,2,2) doubles
+  temporal and spatial dimensions. The R3D-18 encoder outputs (B, 512, T', H', W')
+  with T'≈T/8, H'=H/32, W'=W/32. The decoder applies 3D transposed convs to get
+  back to (B, 1, T, H, W). See mae_decoder_2d.py for the 2D/transposed-conv explanation.
+"""
 import torch
 import torch.nn as nn
 

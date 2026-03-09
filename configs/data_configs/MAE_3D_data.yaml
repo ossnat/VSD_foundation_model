@@ -1,0 +1,37 @@
+# ================================================
+# MAE 3D Data Configuration
+# ================================================
+# Use with model_configs/MAE_3D_resnet.yaml.
+# clip_length > 1 produces (B, C, T, H, W) for 3D MAE.
+# ================================================
+
+# --- Dataset identity ---
+dataset_name: vsd_mae         # Same dataset class; clip_length and patch_size define 3D
+
+# --- Data paths ---
+split_csv_path: "Data/FoundationData/ProcessedData/splits/split_v1_seed17_strat_monkey.csv"
+stats_json_path: "Data/FoundationData/ProcessedData/splits/baseline_stats_v1_seed17_strat_monkey.json"
+processed_root: "Data/FoundationData/ProcessedData/splits"
+
+# --- Frame / clip selection (3D: use multiple frames per sample) ---
+frame_start: 30
+frame_end: 100
+clip_length: 8                # Frames per sample (e.g. 8 or 16 for 3D MAE)
+
+# --- MAE masking (3D patches) ---
+mask_ratio: 0.5               # Fraction of patches to mask
+patch_size: [4, 8, 8]         # (T, H, W) — must divide clip and spatial size
+
+# --- Spatial cropping (optional) ---
+crop_frame: null
+crop_radius: null
+
+# --- Monkey filtering (optional) ---
+# monkeys: null
+
+# --- DataLoader ---
+batch_size: 32                # Smaller than 2D (3D is heavier)
+num_workers: 4
+pin_memory: true
+persistent_workers: true
+prefetch_factor: 2
