@@ -1,0 +1,44 @@
+# ================================================
+# MAE 2D + LSTM — Single config (model + data + training)
+# ================================================
+# Usage: python train.py --config configs/MAE_2D_LSTM_full.yaml
+# Lighter than full 3D; use same data settings as 3D (clip_length > 1).
+# ================================================
+
+# --- Model ---
+model: mae_2d_lstm
+pretrained: false
+channels: 1
+hidden_dim: 256
+lstm_hidden: 256
+normalize_loss: true
+input_height: 100
+input_width: 100
+
+# --- Data (video clips for temporal model) ---
+dataset_name: vsd_mae
+split_csv_path: "Data/FoundationData/ProcessedData/splits/split_v1_seed17_strat_monkey.csv"
+stats_json_path: "Data/FoundationData/ProcessedData/splits/baseline_stats_v1_seed17_strat_monkey.json"
+processed_root: "Data/FoundationData/ProcessedData/splits"
+frame_start: 30
+frame_end: 100
+clip_length: 8
+mask_ratio: 0.5
+patch_size: [4, 8, 8]
+crop_frame: null
+crop_radius: null
+batch_size: 16
+num_workers: 4
+pin_memory: true
+persistent_workers: true
+prefetch_factor: 2
+
+# --- Training ---
+lr: 1.0e-4
+weight_decay: 0.05
+epochs: 100
+max_grad_norm: 1.0
+ckpt_dir: ./checkpoints
+log_dir: logs
+seed: 17
+preload_into_ram: true
