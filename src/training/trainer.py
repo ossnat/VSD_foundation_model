@@ -3,6 +3,7 @@
 # ==================================
 
 import os
+import math
 import torch
 from torch.optim import AdamW
 from torch.cuda.amp import autocast, GradScaler
@@ -49,6 +50,7 @@ class Trainer:
         epochs = self.cfg.get("epochs", 10)
         for epoch in range(epochs):
             self.model.train()
+            train_losses_epoch = []
             pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")
             for batch in pbar:
                 self.opt.zero_grad()
@@ -61,9 +63,11 @@ class Trainer:
                 self.scaler.step(self.opt)
                 self.scaler.update()
 
-                pbar.set_postfix({"loss": float(loss.item())})
-                self.logger.log_scalar("train/loss", float(loss.item()), global_step)
-                loss_buffer.append(float(loss.item()))
+                loss_val = float(loss.item())
+                train_losses_epoch.append(loss_val)
+                pbar.set_postfix({"loss": loss_val})
+                self.logger.log_scalar("train/loss", loss_val, global_step)
+                loss_buffer.append(loss_val)
                 if self.plot_loss and (global_step + 1) % 10 == 0:
                     recent_mean = sum(loss_buffer[-10:]) / 10.0
                     plot_steps.append(global_step + 1)
@@ -71,34 +75,99 @@ class Trainer:
                     fig, ax, line = self._update_loss_plot(plot_steps, plot_losses, fig, ax, line)
                 global_step += 1
 
-                # Step-wise validation
-                if (val_mode == "step" and val_loader is not None
-                        and global_step % val_every == 0):
-                    self._validate(val_loader, global_step)
-                    self.model.train()
+            mean_train_loss = sum(train_losses_epoch) / len(train_losses_epoch) if train_losses_epoch else 0.0
+            self.logger.log_scalar("train/loss_epoch", mean_train_loss, epoch)
+            print(f"  train/loss: {mean_train_loss:.4f}")
 
-            # Epoch-wise validation
-            if (val_mode == "epoch" and val_loader is not None
-                    and (epoch + 1) % val_every == 0):
-                self._validate(val_loader, global_step)
+            # Validation (optional)
+            if val_loader is not None:
+                self.model.eval()
+                with torch.no_grad():
+                    val_losses = []
+                    for batch in val_loader:
+                        val_loss = self._forward_and_loss(batch)
+                        val_losses.append(float(val_loss.item()))
+                    if val_losses:
+                        mean_val_loss = sum(val_losses) / len(val_losses)
+                        self.logger.log_scalar("val/loss", mean_val_loss, epoch)
+                        print(f"  val/loss: {mean_val_loss:.4f}")
 
             # Save checkpoint each epoch
             ckpt_path = os.path.join(self.cfg.get("ckpt_dir","checkpoints"), f"epoch_{epoch+1}.pt")
             torch.save(self.model.state_dict(), ckpt_path)
 
-    def _validate(self, val_loader, step):
-        """Run a full validation pass and log the average loss."""
+    def evaluate_metrics(self, loader, split_name: str = "train") -> dict:
+        """
+        Run the trained model on a dataloader and compute performance metrics.
+        Model-agnostic: collects loss and any metrics returned by the model
+        (e.g. MAE returns mse_overall, mse_masked; DINO could return different metrics).
+        Adds common derived metrics (e.g. PSNR from MSE when available).
+        Prints all metrics to screen and returns them as a dict.
+        """
         self.model.eval()
-        val_losses = []
+        all_losses = []
+        all_metrics = []  # list of dicts per batch
+
         with torch.no_grad():
-            for batch in val_loader:
-                val_loss = self._forward_and_loss(batch)
-                val_losses.append(float(val_loss.item()))
-        if val_losses:
-            avg_val_loss = sum(val_losses) / len(val_losses)
-            self.logger.log_scalar("val/loss", avg_val_loss, step)
-            self.logger.flush()
-            print(f"  [step {step}] val/loss = {avg_val_loss:.6f}")
+            for batch in tqdm(loader, desc=f"Evaluating ({split_name})"):
+                out = self._model_forward_for_metrics(batch)
+                if out is None:
+                    continue
+                if torch.is_tensor(out):
+                    all_losses.append(float(out.item()))
+                    continue
+                if isinstance(out, dict):
+                    if "loss" in out:
+                        all_losses.append(float(out["loss"].item()))
+                    if "metrics" in out and isinstance(out["metrics"], dict):
+                        all_metrics.append({k: float(v) if torch.is_tensor(v) else v for k, v in out["metrics"].items()})
+
+        # Aggregate
+        result = {}
+        if all_losses:
+            result["loss"] = sum(all_losses) / len(all_losses)
+        if all_metrics:
+            keys = all_metrics[0].keys()
+            for k in keys:
+                vals = [m[k] for m in all_metrics if k in m]
+                if vals:
+                    result[k] = sum(vals) / len(vals)
+
+        # Derived metrics (modular: add MAE-specific or others here)
+        if "mse_overall" in result and result["mse_overall"] > 0:
+            # PSNR = 10 * log10(MAX^2 / MSE); assume signal in [0,1] or normalized so MAX^2=1
+            result["psnr_db"] = 10.0 * math.log10(1.0 / result["mse_overall"] + 1e-10)
+        if "mse_masked" in result and result["mse_masked"] > 0:
+            result["psnr_masked_db"] = 10.0 * math.log10(1.0 / result["mse_masked"] + 1e-10)
+
+        # Print to screen
+        print(f"\n--- Metrics ({split_name}) ---")
+        for k, v in sorted(result.items()):
+            if isinstance(v, float):
+                print(f"  {k}: {v:.6f}")
+            else:
+                print(f"  {k}: {v}")
+        print("---\n")
+        return result
+
+    def _model_forward_for_metrics(self, batch):
+        """Run model on batch and return full output (dict or tensor). Used by evaluate_metrics."""
+        # Same batch routing as _forward_and_loss, but return full output
+        if isinstance(batch, (list, tuple)):
+            crops = [b.to(self.device) for b in batch]
+            return self.model(crops)
+        if isinstance(batch, dict):
+            if "crops" in batch:
+                crops = [b.to(self.device) for b in batch["crops"]]
+                return self.model(crops)
+            if "video_masked" in batch and "video_target" in batch and "mask" in batch:
+                mae_batch = {k: v.to(self.device) if torch.is_tensor(v) else v for k, v in batch.items()}
+                return self.model(mae_batch)
+            if "video" in batch:
+                return self.model(batch["video"].to(self.device))
+        if torch.is_tensor(batch):
+            return self.model(batch.to(self.device))
+        return None
 
     def _forward_and_loss(self, batch):
         """Route batch to model depending on task/system.

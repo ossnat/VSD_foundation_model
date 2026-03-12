@@ -1,0 +1,17 @@
+# ================================================
+# MAE 2D + LSTM — Memory-efficient video MAE
+# ================================================
+# 2D ResNet per frame + LSTM over time. Use with clip_length > 1.
+# See docs/MAE_2D_LSTM_design.md for design.
+# ================================================
+
+model: mae_2d_lstm
+pretrained: false
+channels: 1
+hidden_dim: 256
+lstm_hidden: 256
+normalize_loss: true
+
+# Input spatial size (must match your data H, W after crop)
+input_height: 100
+input_width: 100

@@ -6,6 +6,9 @@
 from .backbone.mae_backbone_2d import MAEResNet18Backbone
 from .backbone.mae_backbone_2d_CNN import MAEShallowCNNBackbone
 from .heads.mae_decoder_2d import MAEDecoder2D
+# MAE 3D imports
+from .backbone.mae_backbone_3d import MAER3D18Backbone
+from .heads.mae_decoder_3d import MAEDecoder3D
 from .systems.mae_system import MAESystem
 
 # ---------------------------------------------------------------------------
@@ -16,6 +19,7 @@ from .systems.mae_system import MAESystem
 BACKBONE_REGISTRY = {
     "resnet18": MAEResNet18Backbone,
     "MAEShallowCNNBackbone": MAEShallowCNNBackbone,
+    "MAER3D18Backbone": MAER3D18Backbone,
 }
 
 
@@ -82,6 +86,33 @@ def build_ssl_model(cfg):
         return MAESystem(encoder=encoder, decoder=decoder, config=mae_config)
 
     # ------------------------------------------------------------------
+    # MAE 3D model (video clips: B, C, T, H, W)
+    # ------------------------------------------------------------------
+    elif model_type == "mae_3d":
+        backbone_name = cfg.get("backbone", "MAER3D18Backbone")
+        if backbone_name not in BACKBONE_REGISTRY:
+            raise ValueError(
+                f"Unknown backbone '{backbone_name}'. "
+                f"Available: {list(BACKBONE_REGISTRY.keys())}"
+            )
+        backbone_cls = BACKBONE_REGISTRY[backbone_name]
+        sig = inspect.signature(backbone_cls.__init__)
+        encoder_kwargs = {"in_channels": in_channels}
+        if "pretrained" in sig.parameters:
+            encoder_kwargs["pretrained"] = cfg.get("pretrained", False)
+        encoder = backbone_cls(**encoder_kwargs)
+
+        decoder = MAEDecoder3D(
+            in_channels=encoder.feature_dim,
+            out_channels=in_channels,
+            hidden_dim=cfg.get("hidden_dim", 256),
+        )
+        mae_config = {
+            "loss": {"normalize": cfg.get("normalize_loss", True)},
+        }
+        return MAESystem(encoder=encoder, decoder=decoder, config=mae_config)
+
+    # ------------------------------------------------------------------
     # Legacy 3D CNN model
     # ------------------------------------------------------------------
     elif model_type == "cnn3d":
@@ -116,5 +147,5 @@ def build_ssl_model(cfg):
 
     else:
         raise ValueError(
-            f"Unknown model type: {model_type}. Supported: 'mae_2d', 'cnn3d'"
+            f"Unknown model type: {model_type}. Supported: 'mae_2d', 'mae_3d', 'cnn3d'"
         )

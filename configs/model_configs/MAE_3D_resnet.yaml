@@ -1,0 +1,19 @@
+# ================================================
+# MAE 3D Model Configuration — R3D-18 backbone
+# ================================================
+# Video MAE: clip_length > 1, 3D encoder + 3D decoder.
+# Training hyper-parameters  -> training_configs/
+# Data / loader parameters   -> data_configs/MAE_3D_data.yaml
+# ================================================
+
+# --- Model identity ---
+model: mae_3d                  # Model type: mae_2d | mae_3d
+backbone: MAER3D18Backbone     # 3D ResNet18 (torchvision R3D-18)
+pretrained: false              # Use Kinetics-pretrained weights (optional)
+
+# --- Architecture ---
+channels: 1                   # Input / output channels (VSD = 1)
+hidden_dim: 256               # Decoder hidden dimension
+
+# --- Loss ---
+normalize_loss: true          # Per-patch normalisation in MAE loss

@@ -1,4 +1,24 @@
 # src/models/heads/mae_decoder_2d.py
+"""
+MAE 2D Decoder — Transposed convolution (deconvolution).
+
+What is ConvTranspose2d/3d?
+  - A normal conv (2D or 3D) takes an input and, with stride > 1, produces a *smaller*
+    spatial (and temporal, for 3D) output. The encoder does this: image -> small feature map.
+  - Transposed conv is the "reverse" operation: it takes a small feature map and produces
+    a *larger* one by applying something like the transpose of the conv operation (with
+    stride interpreted as upsampling). So it's the natural building block to go from
+    encoder output back to image/video resolution.
+
+How does the decoder decode ResNet output?
+  - ResNet18 encoder outputs (B, 512, H/32, W/32): one 512-dim feature vector per 32x32
+    image patch. The decoder stacks several ConvTranspose2d layers, each with stride=2,
+    so 5 stages give 2^5 = 32x upsampling in H and W. It also reduces channels (512 -> 256
+    -> ... -> 1) so the final output is (B, 1, H, W), i.e. a reconstructed image.
+  - No learned "unpooling" of mask positions: the decoder sees the *full* low-res feature
+    map (from the masked image); it reconstructs the full image, and the loss is computed
+    only on masked patches (in the system/loss module).
+"""
 import torch
 import torch.nn as nn
 
