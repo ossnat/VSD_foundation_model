@@ -17,3 +17,5 @@ hidden_dim: 256               # Decoder hidden dimension
 
 # --- Loss ---
 normalize_loss: true           # Per-patch normalisation in MAE loss
+crop_loss: "circle"                # null | "square" | "circle" — restrict loss to a centered region
+crop_loss_radius: 40           # Radius in pixels (used when crop_loss is not null)

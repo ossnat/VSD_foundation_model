@@ -78,6 +78,8 @@ def build_ssl_model(cfg):
         mae_config = {
             "loss": {
                 "normalize": cfg.get("normalize_loss", True),
+                "crop_loss": cfg.get("crop_loss", None),
+                "crop_loss_radius": cfg.get("crop_loss_radius", 30),
             },
         }
 

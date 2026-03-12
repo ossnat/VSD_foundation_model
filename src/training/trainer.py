@@ -40,6 +40,10 @@ class Trainer:
         ax = None
         line = None
 
+        # Validation schedule: "epoch" (default) or "step"
+        val_mode = self.cfg.get("val_mode", "epoch")
+        val_every = self.cfg.get("val_every", 1)
+
         if self.plot_loss and plt is None:
             print("Plotting disabled: matplotlib is not available.")
             self.plot_loss = False

@@ -8,12 +8,42 @@ from .base_system import BaseSystem
 class MAELoss(nn.Module):
     """
     Reconstruction loss for Masked Autoencoders.
-    Computes MSE only on masked patches.
+    Computes MSE only on masked patches, optionally restricted to a
+    centered spatial region (circle or square).
     """
-    def __init__(self, normalize: bool = True):
+    def __init__(self, normalize: bool = True,
+                 crop_loss: str = None,
+                 crop_loss_radius: int = 30):
         super().__init__()
         self.normalize = normalize
-    
+        self.crop_loss = crop_loss            # None | "circle" | "square"
+        self.crop_loss_radius = crop_loss_radius
+        self._region_cache: dict = {}
+
+    def _build_region_mask(self, H: int, W: int, device: torch.device) -> torch.Tensor:
+        """Return a (1, 1, H, W) float mask that is 1 inside the region, 0 outside."""
+        key = (H, W, self.crop_loss, self.crop_loss_radius, device)
+        if key in self._region_cache:
+            return self._region_cache[key]
+
+        cy, cx = H / 2.0, W / 2.0
+        r = self.crop_loss_radius
+
+        ys = torch.arange(H, device=device).float()
+        xs = torch.arange(W, device=device).float()
+        yy, xx = torch.meshgrid(ys, xs, indexing="ij")
+
+        if self.crop_loss == "circle":
+            region = ((yy - cy) ** 2 + (xx - cx) ** 2 <= r ** 2).float()
+        elif self.crop_loss == "square":
+            region = ((yy - cy).abs() <= r).float() * ((xx - cx).abs() <= r).float()
+        else:
+            region = torch.ones(H, W, device=device)
+
+        region = region.unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)
+        self._region_cache[key] = region
+        return region
+
     def forward(self, reconstruction: torch.Tensor, 
                 target: torch.Tensor, 
                 mask: torch.Tensor) -> torch.Tensor:
@@ -24,17 +54,21 @@ class MAELoss(nn.Module):
             mask: Binary mask (B, 1, T?, H, W) where 1=visible, 0=masked
         
         Returns:
-            MSE loss computed only on masked patches
+            MSE loss computed only on masked patches (within the crop region
+            when crop_loss is set).
         """
-        # Compute per-element loss
-        loss_per_element = F.mse_loss(reconstruction, target, reduction='none')  # (B, C, T?, H, W)
-        
-        # Apply mask: keep only masked regions (mask == 0)
-        masked_loss = loss_per_element * (1 - mask)
-        
-        # Average over masked patches
-        loss = masked_loss.sum() / ((1 - mask).sum() + 1e-8)
-        
+        loss_per_element = F.mse_loss(reconstruction, target, reduction='none')
+
+        # weight = 1 where the patch was masked (mask==0 means masked)
+        weight = 1 - mask
+
+        if self.crop_loss is not None:
+            H, W = target.shape[-2], target.shape[-1]
+            region = self._build_region_mask(H, W, target.device)
+            weight = weight * region
+
+        masked_loss = loss_per_element * weight
+        loss = masked_loss.sum() / (weight.sum() + 1e-8)
         return loss
 
 
@@ -56,7 +90,12 @@ class MAESystem(BaseSystem):
         
         self.encoder = encoder
         self.decoder = decoder
-        self.loss_fn = MAELoss(normalize=config.get("loss", {}).get("normalize", True))
+        loss_cfg = config.get("loss", {})
+        self.loss_fn = MAELoss(
+            normalize=loss_cfg.get("normalize", True),
+            crop_loss=loss_cfg.get("crop_loss", None),
+            crop_loss_radius=loss_cfg.get("crop_loss_radius", 30),
+        )
         
         # Training config
         self.lr = config.get("training", {}).get("lr", 1e-4)
