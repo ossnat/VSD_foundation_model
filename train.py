@@ -65,7 +65,12 @@ def main(cfg_path: str):
     torch.save(model.encoder.state_dict(), enc_path)
     print(f"Saved encoder to {enc_path}")
 
-
+    # Optional: evaluate reconstruction quality over time on the test set (MSE per clip start frame).
+    # Uncomment the block below to run temporal evaluation after training. This also saves a plot
+    # and a JSON file to results_dir/temporal_eval/ (or ckpt_dir/temporal_eval/ if results_dir not set).
+    # test_loader = load_dataset(cfg, split="test", batch_size=cfg.get("batch_size", 256), num_workers=cfg.get("num_workers", 4), shuffle=False)
+    # temporal_metrics = trainer.evaluate_metrics_over_time(test_loader, split_name="test")
+    # # Optional: pass save_dir="path/to/results" to control where the plot and JSON are saved.
 
 
 if __name__ == "__main__":

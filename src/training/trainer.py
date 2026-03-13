@@ -2,8 +2,11 @@
 # File: src/training/trainer.py
 # ==================================
 
+import json
 import os
 import math
+from collections import defaultdict
+
 import torch
 from torch.optim import AdamW
 from torch.cuda.amp import autocast, GradScaler
@@ -148,6 +151,108 @@ class Trainer:
             else:
                 print(f"  {k}: {v}")
         print("---\n")
+        return result
+
+    def evaluate_metrics_over_time(self, loader, split_name: str = "test", save_dir: str = None) -> dict:
+        """
+        Evaluate reconstruction quality (MSE) over time on the test set.
+        Aggregates per-clip MSE by clip start frame and returns mean (and optionally std)
+        so you can see how performance varies from early to late clips (e.g. frames 30-34 vs 95-99).
+
+        If save_dir is set (or cfg has results_dir), saves a plot and a JSON file of the metrics.
+        Requires MAE-style batches with "video_masked", "video_target", "mask", and "start_frame".
+        Use with shuffle=False so results are reproducible. Does not change training or existing eval.
+        """
+        self.model.eval()
+        all_start_frames = []
+        all_mse = []
+
+        with torch.no_grad():
+            for batch in tqdm(loader, desc=f"Eval over time ({split_name})"):
+                if not isinstance(batch, dict) or "video_masked" not in batch or "video_target" not in batch:
+                    continue
+                if "start_frame" not in batch:
+                    print("evaluate_metrics_over_time: batch missing 'start_frame'; skipping.")
+                    continue
+                batch_with_flag = {**batch, "_return_per_sample_metrics": True}
+                out = self._model_forward_for_metrics(batch_with_flag)
+                if out is None or not isinstance(out, dict) or "mse_per_sample" not in out:
+                    continue
+                start_frames = batch["start_frame"]
+                if torch.is_tensor(start_frames):
+                    start_frames = start_frames.cpu().tolist()
+                else:
+                    start_frames = list(start_frames)
+                mse_list = out["mse_per_sample"].cpu().tolist()
+                all_start_frames.extend(start_frames)
+                all_mse.extend(mse_list)
+
+        if not all_start_frames:
+            print(f"evaluate_metrics_over_time: no samples collected for {split_name}.")
+            return {}
+
+        # Aggregate by start_frame
+        by_start = defaultdict(list)
+        for s, m in zip(all_start_frames, all_mse):
+            by_start[s].append(m)
+
+        result = {}
+        for start_frame in sorted(by_start.keys()):
+            vals = by_start[start_frame]
+            mean_mse = sum(vals) / len(vals)
+            variance = sum((x - mean_mse) ** 2 for x in vals) / len(vals) if len(vals) > 1 else 0.0
+            std_mse = math.sqrt(variance)
+            result[start_frame] = {
+                "mean_mse": mean_mse,
+                "std_mse": std_mse,
+                "mean_rmse": math.sqrt(mean_mse),
+                "count": len(vals),
+            }
+
+        # Print table
+        print(f"\n--- Metrics over time ({split_name}) ---")
+        print(f"{'start_frame':<12} {'mean_mse':<12} {'mean_rmse':<12} {'std_mse':<10} {'count':<8}")
+        print("-" * 54)
+        for start_frame in sorted(result.keys()):
+            r = result[start_frame]
+            print(f"{start_frame:<12} {r['mean_mse']:<12.6f} {r['mean_rmse']:<12.6f} {r['std_mse']:<10.6f} {r['count']:<8}")
+        print("---\n")
+
+        # Save to results dir: JSON (metrics) + PNG (plot)
+        out_dir = save_dir or self.cfg.get("results_dir") or self.cfg.get("ckpt_dir", "checkpoints")
+        out_dir = os.path.join(out_dir, "temporal_eval")
+        os.makedirs(out_dir, exist_ok=True)
+        base_name = f"temporal_metrics_{split_name}"
+        json_path = os.path.join(out_dir, f"{base_name}.json")
+        plot_path = os.path.join(out_dir, f"{base_name}.png")
+        # JSON: list of records for easy reading
+        records = [{"start_frame": sf, **r} for sf, r in sorted(result.items())]
+        with open(json_path, "w") as f:
+            json.dump({"split": split_name, "metrics": records}, f, indent=2)
+        print(f"Saved temporal metrics to {json_path}")
+
+        if plt is not None:
+            fig, axes = plt.subplots(2, 1, figsize=(8, 8), sharex=True)
+            x = sorted(result.keys())
+            mean_mse = [result[sf]["mean_mse"] for sf in x]
+            std_mse = [result[sf]["std_mse"] for sf in x]
+            mean_rmse = [result[sf]["mean_rmse"] for sf in x]
+            axes[0].errorbar(x, mean_mse, yerr=std_mse, capsize=3, marker="o", linestyle="-")
+            axes[0].set_ylabel("MSE")
+            axes[0].set_title(f"Reconstruction MSE over time ({split_name})")
+            axes[0].grid(True, alpha=0.3)
+            axes[1].plot(x, mean_rmse, marker="o", linestyle="-")
+            axes[1].set_xlabel("Clip start frame")
+            axes[1].set_ylabel("RMSE")
+            axes[1].set_title(f"Reconstruction RMSE over time ({split_name})")
+            axes[1].grid(True, alpha=0.3)
+            fig.tight_layout()
+            fig.savefig(plot_path, dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            print(f"Saved temporal metrics plot to {plot_path}")
+        else:
+            print("Matplotlib not available; skipping plot.")
+
         return result
 
     def _model_forward_for_metrics(self, batch):

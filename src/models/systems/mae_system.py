@@ -156,6 +156,7 @@ class MAESystem(BaseSystem):
         loss = self.loss_fn(reconstruction, video_target, mask)
         
         # Compute additional metrics for logging (z-score recon and target so MSE/PSNR are scale-invariant)
+        mse_per_sample = None
         with torch.no_grad():
             eps = 1e-8
             # Z-score reconstruction and target per batch so we compare two normalized populations
@@ -171,6 +172,11 @@ class MAESystem(BaseSystem):
             loss_per_elem = (recon_norm - target_norm).pow(2)
             mse_masked = (loss_per_elem * (1 - mask)).sum() / ((1 - mask).sum() + eps)
             mse_visible = (loss_per_elem * mask).sum() / (mask.sum() + eps)
+
+            # Optional: per-sample MSE (B,) for temporal evaluation
+            if batch.get("_return_per_sample_metrics"):
+                B = reconstruction.shape[0]
+                mse_per_sample = loss_per_elem.reshape(B, -1).mean(dim=1)  # (B,)
         
         metrics = {
             "mse_overall": mse_overall.item(),
@@ -178,10 +184,13 @@ class MAESystem(BaseSystem):
             "mse_visible": mse_visible.item(),
         }
         
-        return {
+        out = {
             "loss": loss,
             "metrics": metrics
         }
+        if mse_per_sample is not None:
+            out["mse_per_sample"] = mse_per_sample
+        return out
     
     def get_optimizer(self, lr=None, weight_decay=None):
         """
