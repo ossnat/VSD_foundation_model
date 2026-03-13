@@ -6,6 +6,8 @@
 from .backbone.mae_backbone_2d import MAEResNet18Backbone
 from .backbone.mae_backbone_2d_CNN import MAEShallowCNNBackbone
 from .heads.mae_decoder_2d import MAEDecoder2D
+from .backbone.mae_backbone_2d_lstm import Video2DLSTMEncoder
+from .heads.mae_decoder_2d_lstm import Video2DLSTMDecoder
 # MAE 3D imports
 from .backbone.mae_backbone_3d import MAER3D18Backbone
 from .heads.mae_decoder_3d import MAEDecoder3D
@@ -113,6 +115,35 @@ def build_ssl_model(cfg):
         return MAESystem(encoder=encoder, decoder=decoder, config=mae_config)
 
     # ------------------------------------------------------------------
+    # MAE 2D + LSTM (video clips: 2D backbone per frame + LSTM over time)
+    # ------------------------------------------------------------------
+    elif model_type == "mae_2d_lstm":
+        encoder = Video2DLSTMEncoder(
+            pretrained=cfg.get("pretrained", False),
+            in_channels=in_channels,
+            lstm_hidden=cfg.get("lstm_hidden", 256),
+            input_height=cfg.get("input_height", 100),
+            input_width=cfg.get("input_width", 100),
+        )
+        decoder = Video2DLSTMDecoder(
+            in_channels=encoder.feature_dim,
+            out_channels=in_channels,
+            hidden_dim=cfg.get("hidden_dim", 256),
+        )
+        mae_config = {
+            "loss": {
+                "normalize": cfg.get("normalize_loss", True),
+                "crop_loss": cfg.get("crop_loss", None),
+                "crop_loss_radius": cfg.get("crop_loss_radius", 30),
+            },
+            "training": {
+                "lr": cfg.get("lr", 1e-4),
+                "weight_decay": cfg.get("weight_decay", 0.05),
+            },
+        }
+        return MAESystem(encoder=encoder, decoder=decoder, config=mae_config)
+
+    # ------------------------------------------------------------------
     # Legacy 3D CNN model
     # ------------------------------------------------------------------
     elif model_type == "cnn3d":
@@ -147,5 +178,5 @@ def build_ssl_model(cfg):
 
     else:
         raise ValueError(
-            f"Unknown model type: {model_type}. Supported: 'mae_2d', 'mae_3d', 'cnn3d'"
+            f"Unknown model type: {model_type}. Supported: 'mae_2d', 'mae_2d_lstm', 'mae_3d', 'cnn3d'"
         )
