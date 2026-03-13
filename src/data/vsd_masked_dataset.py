@@ -36,6 +36,8 @@ class VsdMaskedDataset(VsdVideoDataset):
             "video_masked": masked_tensor,      # Input to model, has masked patches zeroed
             "video_target": target_tensor,      # Ground truth for masked patches
             "mask": mask_tensor,                # Mask indicator: 1=keep, 0=mask patch
+            "start_frame": sample["start_frame"],
+            "end_frame": sample["end_frame"],
             "monkey": sample["monkey"],
             "date": sample["date"],
             "condition": sample["condition"],
