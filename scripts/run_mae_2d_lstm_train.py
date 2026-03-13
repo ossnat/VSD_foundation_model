@@ -120,9 +120,16 @@ def main():
     torch.save(model.encoder.state_dict(), enc_path)
     print(f"Saved encoder to {enc_path}")
 
-    # Optional: temporal eval on test set (uncomment to run)
-    # temporal_metrics = trainer.evaluate_metrics_over_time(test_loader, split_name="test")
-    # print("Temporal metrics:", temporal_metrics)
+    # Evaluate MSE over time on test set; plot and save JSON, then print locations to screen
+    temporal_metrics = trainer.evaluate_metrics_over_time(test_loader, split_name="test")
+    out_dir = cfg.get("results_dir") or cfg.get("ckpt_dir", "checkpoints")
+    temporal_dir = os.path.join(out_dir, "temporal_eval")
+    plot_path = os.path.join(temporal_dir, "temporal_metrics_test.png")
+    json_path = os.path.join(temporal_dir, "temporal_metrics_test.json")
+    print("\n--- Temporal evaluation outputs (test set) ---")
+    print(f"  Plot:  {os.path.abspath(plot_path)}")
+    print(f"  JSON:  {os.path.abspath(json_path)}")
+    print("---\n")
 
 
 if __name__ == "__main__":
