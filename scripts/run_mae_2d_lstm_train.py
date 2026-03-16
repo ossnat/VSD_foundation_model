@@ -26,9 +26,10 @@ from src.utils.logger import TBLogger, set_seed
 CONFIG_OVERRIDES = {
     # Data / split
     "monkeys": ["frodo"],
-    "split_csv_path": "Data/FoundationData/ProcessedData/splits/split_v2_seed17_strat_monkey.csv",
-    "stats_json_path": "Data/FoundationData/ProcessedData/splits/baseline_stats_v2_seed17_strat_monkey.json",
-    # MAE masking (dataset)
+    # "split_csv_path": "Data/FoundationData/ProcessedData/splits/split_v2_seed17_strat_monkey.csv",
+    # "stats_json_path": "Data/FoundationData/ProcessedData/splits/baseline_stats_v2_seed17_strat_monkey.json",
+    "split_csv_path": 'Data/FoundationData/ProcessedData/splits/split_v2_seed17_session_split.csv',
+    "stats_json_path": 'Data/FoundationData/ProcessedData/splits/baseline_stats_v2_seed17_session_split.json',    # MAE masking (dataset)
     "mask_ratio": 0.85,
     # Training
     "epochs": 16,
