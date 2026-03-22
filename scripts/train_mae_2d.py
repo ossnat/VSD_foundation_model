@@ -60,9 +60,9 @@ def _merge_cli_overrides(args: argparse.Namespace) -> Dict[str, Any]:
     set_if("backbone", args.backbone)
     set_if("channels", args.channels)
     set_if("hidden_dim", args.hidden_dim)
-    set_if("crop_loss_radius", args.crop_loss_radius)
+    set_if("crop_loss_radius", getattr(args, "crop_loss_radius", None))
 
-    if args.crop_loss is not None:
+    if getattr(args, "crop_loss", None) is not None:
         o["crop_loss"] = _optional_str(args.crop_loss)
 
     if args.pretrained is not None:
@@ -74,12 +74,14 @@ def _merge_cli_overrides(args: argparse.Namespace) -> Dict[str, Any]:
     if args.pin_memory is not None:
         o["pin_memory"] = args.pin_memory
 
-    cf = _optional_str(args.crop_frame)
-    if cf is not None or args.crop_frame is not None:
+    crop_frame_arg = getattr(args, "crop_frame", None)
+    cf = _optional_str(crop_frame_arg)
+    if cf is not None or crop_frame_arg is not None:
         o["crop_frame"] = cf
 
-    if args.crop_radius is not None:
-        o["crop_radius"] = args.crop_radius
+    cr = getattr(args, "crop_radius", None)
+    if cr is not None:
+        o["crop_radius"] = cr
 
     return o
 
@@ -143,6 +145,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help='Loss crop: null | "square" | "circle" (matches YAML crop_loss).',
+    )
+    p.add_argument(
+        "--crop-loss-radius",
+        type=int,
+        default=None,
+        help="Pixel radius for crop_loss (matches YAML crop_loss_radius; default from config if omitted).",
     )
 
     # Training
