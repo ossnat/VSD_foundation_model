@@ -1,0 +1,45 @@
+# ================================================
+# MAE 2D (ResNet18 + MAEDecoder2D) — single-frame / no LSTM
+# ================================================
+# Same data layout as MAE_2D_LSTM_full but clip_length: 1 (2D clips).
+# Usage: PYTHONPATH=. python scripts/train_mae_2d.py --config configs/MAE_2D_full.yaml
+# ================================================
+
+# --- Model ---
+model: mae_2d
+backbone: resnet18
+pretrained: false
+channels: 1
+hidden_dim: 256
+normalize_loss: true
+crop_loss: null
+crop_loss_radius: 30
+
+# --- Data ---
+dataset_name: vsd_mae
+split_csv_path: "Data/FoundationData/ProcessedData/splits/split_v2_seed17_session_split.csv"
+stats_json_path: "Data/FoundationData/ProcessedData/splits/baseline_stats_v2_seed17_session_split.json"
+processed_root: "Data/FoundationData/ProcessedData/splits"
+frame_start: 30
+frame_end: 100
+clip_length: 1
+mask_ratio: 0.5
+patch_size: [1, 8, 8]
+crop_frame: null
+crop_radius: null
+val_frame_stride: 1
+batch_size: 32
+num_workers: 4
+pin_memory: true
+persistent_workers: true
+prefetch_factor: 2
+
+# --- Training ---
+lr: 1.0e-4
+weight_decay: 0.05
+epochs: 100
+max_grad_norm: 1.0
+ckpt_dir: ./checkpoints_mae2d
+log_dir: logs_mae2d
+seed: 17
+preload_into_ram: true
