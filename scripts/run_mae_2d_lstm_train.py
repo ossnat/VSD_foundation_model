@@ -17,6 +17,7 @@ from src.data import load_dataset
 from src.models import build_ssl_model
 from src.training.trainer import Trainer
 from src.utils.logger import TBLogger, set_seed
+from src.experiments.mae_2d_lstm.vis_test_reconstruction import save_test_reconstruction_figure
 
 
 # =============================================================================
@@ -121,15 +122,21 @@ def main():
     torch.save(model.encoder.state_dict(), enc_path)
     print(f"Saved encoder to {enc_path}")
 
-    # Evaluate MSE over time on test set; plot and save JSON, then print locations to screen
+    # Test metrics (MSE, R², SSIM on masked pixels, etc.) + temporal plots + recon visualization
+    trainer.evaluate_metrics(test_loader, split_name="test")
     temporal_metrics = trainer.evaluate_metrics_over_time(test_loader, split_name="test")
     out_dir = cfg.get("results_dir") or cfg.get("ckpt_dir", "checkpoints")
     temporal_dir = os.path.join(out_dir, "temporal_eval")
     plot_path = os.path.join(temporal_dir, "temporal_metrics_test.png")
     json_path = os.path.join(temporal_dir, "temporal_metrics_test.json")
+    recon_path = save_test_reconstruction_figure(
+        model, test_loader, device, temporal_dir, split_name="test", num_batches=1, max_frames_per_clip=8
+    )
     print("\n--- Temporal evaluation outputs (test set) ---")
     print(f"  Plot:  {os.path.abspath(plot_path)}")
     print(f"  JSON:  {os.path.abspath(json_path)}")
+    if recon_path:
+        print(f"  Recon: {os.path.abspath(recon_path)}")
     print("---\n")
 
 

@@ -5,6 +5,7 @@ import torch
 
 from src.training.trainer import Trainer
 from src.utils.logger import TBLogger, set_seed
+from src.experiments.mae_2d_lstm.vis_test_reconstruction import save_test_reconstruction_figure
 
 
 def run_training_and_temporal_eval(
@@ -40,8 +41,23 @@ def run_training_and_temporal_eval(
     # Standard metrics on test set (optional, but useful)
     eval_metrics = trainer.evaluate_metrics(test_loader, split_name="test")
 
-    # Temporal evaluation: MSE/RMSE over time, plus plot + JSON paths are printed by Trainer
+    # Temporal evaluation: MSE/RMSE/R²/SSIM over time, plus plot + JSON paths are printed by Trainer
     temporal_metrics = trainer.evaluate_metrics_over_time(test_loader, split_name="test")
+
+    # Test-only visualization: original | reconstructed | |diff|
+    vis_dir = os.path.join(
+        cfg.get("results_dir") or cfg.get("ckpt_dir", "checkpoints"),
+        "temporal_eval",
+    )
+    save_test_reconstruction_figure(
+        model,
+        test_loader,
+        device,
+        out_dir=vis_dir,
+        split_name="test",
+        num_batches=1,
+        max_frames_per_clip=8,
+    )
 
     return eval_metrics, temporal_metrics
 
