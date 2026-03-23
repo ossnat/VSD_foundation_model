@@ -54,10 +54,16 @@ def save_test_reconstruction_figure(
     split_name: str = "test",
     num_batches: int = 1,
     max_frames_per_clip: int = 8,
+    plot_masked: bool = False,
 ) -> Optional[str]:
     """
     Take the first `num_batches` from test_loader, first sample in each batch,
-    plot rows = time frames (3D) or one row (2D), cols = original | recon | |diff|.
+    plot rows = time frames (3D) or one row (2D).
+
+    If `plot_masked` is False:
+      cols = original | reconstructed | |diff|
+    If `plot_masked` is True:
+      cols = original | masked_input | reconstructed | |diff|
 
     Returns path to saved PNG or None if matplotlib unavailable.
     """
@@ -67,9 +73,15 @@ def save_test_reconstruction_figure(
 
     model.eval()
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, f"test_reconstruction_orig_recon_diff_{split_name}.png")
+    if plot_masked:
+        out_path = os.path.join(
+            out_dir, f"test_reconstruction_orig_masked_recon_diff_{split_name}.png"
+        )
+    else:
+        out_path = os.path.join(out_dir, f"test_reconstruction_orig_recon_diff_{split_name}.png")
 
     rows_plotted = []
+    plot_is_2d: Optional[bool] = None
     with torch.no_grad():
         for bi, batch in enumerate(test_loader):
             if bi >= num_batches:
@@ -81,48 +93,82 @@ def save_test_reconstruction_figure(
             # First sample in batch
             if recon.dim() == 4:
                 # (B,C,H,W)
+                plot_is_2d = True
                 o = target[0, 0].cpu().numpy()
                 r = recon[0, 0].cpu().numpy()
+                m = masked[0, 0].cpu().numpy()
                 d = np.abs(o - r)
-                rows_plotted.append((o, r, d, 0))
+                rows_plotted.append((o, r, d, m, 0))
             else:
                 # (B,C,T,H,W)
+                plot_is_2d = False
                 T = min(recon.shape[2], max_frames_per_clip)
                 for t in range(T):
                     o = target[0, 0, t].cpu().numpy()
                     rr = recon[0, 0, t].cpu().numpy()
+                    m = masked[0, 0, t].cpu().numpy()
                     d = np.abs(o - rr)
-                    rows_plotted.append((o, rr, d, t))
+                    rows_plotted.append((o, rr, d, m, t))
 
     if not rows_plotted:
         return None
 
     nrows = len(rows_plotted)
-    fig, axes = plt.subplots(nrows, 3, figsize=(10, 2.2 * nrows))
+    ncols = 4 if plot_masked else 3
+    fig, axes = plt.subplots(nrows, ncols, figsize=(10, 2.2 * nrows))
     if nrows == 1:
         axes = np.array([axes])
 
-    flat = np.concatenate([x[0].ravel() for x in rows_plotted])
+    if plot_masked:
+        flat = np.concatenate([x[0].ravel() for x in rows_plotted] + [x[1].ravel() for x in rows_plotted] + [x[3].ravel() for x in rows_plotted])
+    else:
+        flat = np.concatenate([x[0].ravel() for x in rows_plotted] + [x[1].ravel() for x in rows_plotted])
     vmin, vmax = np.percentile(flat, 5), np.percentile(flat, 95)
 
-    for i, (o, r, d, t) in enumerate(rows_plotted):
+    for i, (o, r, d, m, t) in enumerate(rows_plotted):
+        # Original
         axes[i, 0].imshow(o, cmap="hot", vmin=vmin, vmax=vmax)
-        axes[i, 0].set_ylabel(f"t={t}" if recon.dim() == 5 else "sample")
+        axes[i, 0].set_ylabel(f"t={t}" if plot_is_2d is False else "sample")
         axes[i, 0].set_xticks([])
         axes[i, 0].set_yticks([])
         if i == 0:
             axes[i, 0].set_title("Original")
-        axes[i, 1].imshow(r, cmap="hot", vmin=vmin, vmax=vmax)
-        axes[i, 1].set_xticks([])
-        axes[i, 1].set_yticks([])
-        if i == 0:
-            axes[i, 1].set_title("Reconstructed")
-        dmax = max(d.max(), 1e-8)
-        axes[i, 2].imshow(d, cmap="magma", vmin=0, vmax=dmax)
-        axes[i, 2].set_xticks([])
-        axes[i, 2].set_yticks([])
-        if i == 0:
-            axes[i, 2].set_title("|Original − Recon|")
+
+        if plot_masked:
+            # Masked input
+            axes[i, 1].imshow(m, cmap="hot", vmin=vmin, vmax=vmax)
+            axes[i, 1].set_xticks([])
+            axes[i, 1].set_yticks([])
+            if i == 0:
+                axes[i, 1].set_title("Masked input")
+
+            # Reconstructed
+            axes[i, 2].imshow(r, cmap="hot", vmin=vmin, vmax=vmax)
+            axes[i, 2].set_xticks([])
+            axes[i, 2].set_yticks([])
+            if i == 0:
+                axes[i, 2].set_title("Reconstructed")
+
+            dmax = max(d.max(), 1e-8)
+            axes[i, 3].imshow(d, cmap="magma", vmin=0, vmax=dmax)
+            axes[i, 3].set_xticks([])
+            axes[i, 3].set_yticks([])
+            if i == 0:
+                axes[i, 3].set_title("|Original − Recon|")
+        else:
+            # Reconstructed (column 1)
+            axes[i, 1].imshow(r, cmap="hot", vmin=vmin, vmax=vmax)
+            axes[i, 1].set_xticks([])
+            axes[i, 1].set_yticks([])
+            if i == 0:
+                axes[i, 1].set_title("Reconstructed")
+
+            dmax = max(d.max(), 1e-8)
+            axes[i, 2].imshow(d, cmap="magma", vmin=0, vmax=dmax)
+            axes[i, 2].set_xticks([])
+            axes[i, 2].set_yticks([])
+            if i == 0:
+                axes[i, 2].set_title("|Original − Recon|")
 
     plt.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")

@@ -42,6 +42,9 @@ class Trainer:
         fig = None
         ax = None
         line = None
+        # Epoch-level loss history (used for saved plots/analysis)
+        train_loss_epoch_history = []
+        val_loss_epoch_history = []
 
         # Validation schedule: "epoch" (default) or "step"
         val_mode = self.cfg.get("val_mode", "epoch")
@@ -81,6 +84,7 @@ class Trainer:
             mean_train_loss = sum(train_losses_epoch) / len(train_losses_epoch) if train_losses_epoch else 0.0
             self.logger.log_scalar("train/loss_epoch", mean_train_loss, epoch)
             print(f"  train/loss: {mean_train_loss:.4f}")
+            train_loss_epoch_history.append(mean_train_loss)
 
             # Validation (optional)
             if val_loader is not None:
@@ -94,10 +98,20 @@ class Trainer:
                         mean_val_loss = sum(val_losses) / len(val_losses)
                         self.logger.log_scalar("val/loss", mean_val_loss, epoch)
                         print(f"  val/loss: {mean_val_loss:.4f}")
+                        val_loss_epoch_history.append(mean_val_loss)
+                    else:
+                        val_loss_epoch_history.append(None)
+            else:
+                val_loss_epoch_history.append(None)
 
             # Save checkpoint each epoch
             ckpt_path = os.path.join(self.cfg.get("ckpt_dir","checkpoints"), f"epoch_{epoch+1}.pt")
             torch.save(self.model.state_dict(), ckpt_path)
+
+        return {
+            "train_loss_epoch": train_loss_epoch_history,
+            "val_loss_epoch": val_loss_epoch_history,
+        }
 
     def evaluate_metrics(self, loader, split_name: str = "train") -> dict:
         """
@@ -111,7 +125,9 @@ class Trainer:
         all_losses = []
         all_metrics = []  # list of dicts per batch
 
-        extended_test = split_name == "test"
+        # For MAE we can compute the extra masked metrics (R2/SSIM) without needing
+        # a separate code path; do it for test and also for validation.
+        extended_test = split_name in ("test", "val")
         with torch.no_grad():
             for batch in tqdm(loader, desc=f"Evaluating ({split_name})"):
                 out = self._model_forward_for_metrics(batch, extended_test_metrics=extended_test)
