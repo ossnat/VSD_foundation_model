@@ -184,6 +184,46 @@ def _select_test_indices(
     return selected, {"mode": "random_subset", "subset_size": k, "total_test_samples": total}
 
 
+def _select_sequence_vis_indices(
+    dataset: Any,
+    pool_indices: Sequence[int],
+    seed: int,
+    n_sequences: int = 2,
+) -> List[int]:
+    """
+    Pick contiguous-in-time visualization indices from test set.
+    For each selected sequence (trial), include all available frames in pool order.
+    Returns a flat ordered list of dataset indices.
+    """
+    if not pool_indices:
+        return []
+    if not hasattr(dataset, "data_structure"):
+        return list(pool_indices)[:10]
+
+    # Group by trial row index, preserve frame order by clip_start
+    by_trial: Dict[int, List[Tuple[int, int]]] = {}
+    for ds_idx in pool_indices:
+        row_idx, clip_start = dataset.data_structure[ds_idx]
+        by_trial.setdefault(int(row_idx), []).append((int(clip_start), int(ds_idx)))
+    if not by_trial:
+        return list(pool_indices)[:10]
+
+    for row_idx in by_trial:
+        by_trial[row_idx].sort(key=lambda x: x[0])
+
+    trial_ids = list(by_trial.keys())
+    rng = random.Random(seed)
+    rng.shuffle(trial_ids)
+    chosen_trials = trial_ids[: min(n_sequences, len(trial_ids))]
+
+    vis_indices: List[int] = []
+    for trial_id in chosen_trials:
+        vis_indices.extend([ds_idx for _clip_start, ds_idx in by_trial[trial_id]])
+
+    # Keep plot size manageable but still informative
+    return vis_indices[: max(10, len(chosen_trials) * 4)]
+
+
 def main() -> None:
     args = _parse_args()
     set_seed(args.seed)
@@ -284,8 +324,13 @@ def main() -> None:
     # Build a dedicated visualization loader:
     # - batch_size=1 so each batch contributes exactly one plotted sample
     # - choose at least 10 samples when available (or all if fewer)
-    n_vis = min(10, len(selected_indices))
-    vis_indices = random.Random(args.seed).sample(selected_indices, k=n_vis) if n_vis > 0 else []
+    vis_indices = _select_sequence_vis_indices(
+        dataset=test_loader.dataset,
+        pool_indices=selected_indices,
+        seed=args.seed,
+        n_sequences=2,
+    )
+    n_vis = len(vis_indices)
     vis_subset = Subset(test_loader.dataset, vis_indices)
     vis_loader = DataLoader(
         vis_subset,
@@ -325,7 +370,7 @@ def main() -> None:
     else:
         print(
             f"[eval_specific_subset] Saved reconstruction plots in: {vis_dir} "
-            f"(samples plotted: {n_vis}, max_frames_per_clip: {max_frames})"
+            f"(sequence frames plotted: {n_vis}, max_frames_per_clip: {max_frames})"
         )
 
     print(f"[eval_specific_subset] Done. Results saved to: {out_dir}")
@@ -376,8 +421,13 @@ def main() -> None:
         )
 
         # Retinotopic sample plots (same defaults as main subset: up to 10 samples)
-        n_vis_r = min(10, len(retino_indices))
-        vis_indices_r = random.Random(args.seed).sample(retino_indices, k=n_vis_r) if n_vis_r > 0 else []
+        vis_indices_r = _select_sequence_vis_indices(
+            dataset=test_loader.dataset,
+            pool_indices=retino_indices,
+            seed=args.seed,
+            n_sequences=2,
+        )
+        n_vis_r = len(vis_indices_r)
         vis_subset_r = Subset(test_loader.dataset, vis_indices_r)
         vis_loader_r = DataLoader(
             vis_subset_r,

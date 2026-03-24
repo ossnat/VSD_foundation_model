@@ -89,6 +89,18 @@ def save_test_reconstruction_figure(
             if not isinstance(batch, dict) or "video_masked" not in batch:
                 continue
             recon, target, masked, _mask = _forward_reconstruction(model, batch, device)
+            start_frames = batch.get("start_frame", None)
+            if torch.is_tensor(start_frames):
+                start_frame_val = int(start_frames[0].item())
+            elif isinstance(start_frames, (list, tuple)) and len(start_frames) > 0:
+                start_frame_val = int(start_frames[0])
+            elif start_frames is not None:
+                try:
+                    start_frame_val = int(start_frames)
+                except Exception:
+                    start_frame_val = 0
+            else:
+                start_frame_val = 0
 
             # First sample in batch
             if recon.dim() == 4:
@@ -98,7 +110,7 @@ def save_test_reconstruction_figure(
                 r = recon[0, 0].cpu().numpy()
                 m = masked[0, 0].cpu().numpy()
                 d = np.abs(o - r)
-                rows_plotted.append((o, r, d, m, 0))
+                rows_plotted.append((o, r, d, m, start_frame_val))
             else:
                 # (B,C,T,H,W)
                 plot_is_2d = False
@@ -108,7 +120,7 @@ def save_test_reconstruction_figure(
                     rr = recon[0, 0, t].cpu().numpy()
                     m = masked[0, 0, t].cpu().numpy()
                     d = np.abs(o - rr)
-                    rows_plotted.append((o, rr, d, m, t))
+                    rows_plotted.append((o, rr, d, m, start_frame_val + t))
 
     if not rows_plotted:
         return None
@@ -125,10 +137,10 @@ def save_test_reconstruction_figure(
         flat = np.concatenate([x[0].ravel() for x in rows_plotted] + [x[1].ravel() for x in rows_plotted])
     vmin, vmax = np.percentile(flat, 5), np.percentile(flat, 95)
 
-    for i, (o, r, d, m, t) in enumerate(rows_plotted):
+    for i, (o, r, d, m, frame_no) in enumerate(rows_plotted):
         # Original
         axes[i, 0].imshow(o, cmap="hot", vmin=vmin, vmax=vmax)
-        axes[i, 0].set_ylabel(f"t={t}" if plot_is_2d is False else "sample")
+        axes[i, 0].set_ylabel(f"frame={frame_no}")
         axes[i, 0].set_xticks([])
         axes[i, 0].set_yticks([])
         if i == 0:
