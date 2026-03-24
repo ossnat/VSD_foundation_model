@@ -43,3 +43,4 @@ ckpt_dir: ./checkpoints_mae2d
 log_dir: logs_mae2d
 seed: 17
 preload_into_ram: true
+plot_retinotopic: false

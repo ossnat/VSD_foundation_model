@@ -42,3 +42,4 @@ ckpt_dir: ./checkpoints
 log_dir: logs
 seed: 17
 preload_into_ram: true
+plot_retinotopic: false

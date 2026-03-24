@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import random
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -70,6 +71,15 @@ def _parse_args() -> argparse.Namespace:
         help="Random subset size when --target-files is empty.",
     )
     p.add_argument("--seed", type=int, default=17)
+    p.add_argument(
+        "--plot-retinotopic",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "If true, also evaluate a retinotopic test-only subset: target_file basename "
+            "matching session_YYMMDDa_condsAN.h5. Saved under a separate subdir."
+        ),
+    )
     return p.parse_args()
 
 
@@ -91,6 +101,8 @@ def _build_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         o["batch_size"] = args.batch_size
     if args.seed is not None:
         o["seed"] = args.seed
+    if args.plot_retinotopic is not None:
+        o["plot_retinotopic"] = args.plot_retinotopic
     return o
 
 
@@ -269,30 +281,147 @@ def main() -> None:
 
     model_type = cfg.get("model", "mae_2d")
     max_frames = 4 if model_type == "mae_2d_lstm" else 1
-    num_batches = 10
-    vis_dir = out_dir / "temporal_eval"
+    # Build a dedicated visualization loader:
+    # - batch_size=1 so each batch contributes exactly one plotted sample
+    # - choose at least 10 samples when available (or all if fewer)
+    n_vis = min(10, len(selected_indices))
+    vis_indices = random.Random(args.seed).sample(selected_indices, k=n_vis) if n_vis > 0 else []
+    vis_subset = Subset(test_loader.dataset, vis_indices)
+    vis_loader = DataLoader(
+        vis_subset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=args.test_num_workers,
+        pin_memory=cfg.get("pin_memory", False),
+    )
+
+    vis_dir = out_dir / "plots"
+    vis_dir.mkdir(parents=True, exist_ok=True)
     save_test_reconstruction_figure(
         model=model,
-        test_loader=subset_loader,
+        test_loader=vis_loader,
         device=device,
         out_dir=str(vis_dir),
         split_name=split_name,
-        num_batches=num_batches,
+        num_batches=n_vis,
         max_frames_per_clip=max_frames,
         plot_masked=False,
     )
-    save_test_reconstruction_figure(
+    masked_plot_path = save_test_reconstruction_figure(
         model=model,
-        test_loader=subset_loader,
+        test_loader=vis_loader,
         device=device,
         out_dir=str(vis_dir),
         split_name=split_name,
-        num_batches=num_batches,
+        num_batches=n_vis,
         max_frames_per_clip=max_frames,
         plot_masked=True,
     )
+    if masked_plot_path is None:
+        print(
+            "[eval_specific_subset] Warning: reconstruction plots were not generated. "
+            "Check matplotlib availability in the runtime."
+        )
+    else:
+        print(
+            f"[eval_specific_subset] Saved reconstruction plots in: {vis_dir} "
+            f"(samples plotted: {n_vis}, max_frames_per_clip: {max_frames})"
+        )
 
     print(f"[eval_specific_subset] Done. Results saved to: {out_dir}")
+
+    # Optional additional retinotopic subset analysis on test set only.
+    # Match files where experiment suffix ends with 'a' before "_condsAN.h5",
+    # e.g. session_230909a_condsAN.h5
+    if bool(cfg.get("plot_retinotopic", False)):
+        if not hasattr(test_loader.dataset, "trials") or not hasattr(test_loader.dataset, "data_structure"):
+            print(
+                "[eval_specific_subset] plot_retinotopic=true but dataset does not expose "
+                "trials/data_structure; skipping retinotopic subset."
+            )
+            return
+
+        pat = re.compile(r"session_\d{6}a_condsAN\.h5$")
+        retino_indices: List[int] = []
+        for i, (row_idx, _clip_start) in enumerate(test_loader.dataset.data_structure):
+            tf = str(test_loader.dataset.trials.iloc[row_idx]["target_file"])
+            if pat.search(Path(tf).name):
+                retino_indices.append(i)
+
+        if not retino_indices:
+            print(
+                "[eval_specific_subset] plot_retinotopic=true but no matching test files found "
+                "(session_YYMMDDa_condsAN.h5)."
+            )
+            return
+
+        retino_dir = out_dir / "RETINOTOPIC_A"
+        retino_dir.mkdir(parents=True, exist_ok=True)
+
+        retino_subset = Subset(test_loader.dataset, retino_indices)
+        retino_loader = DataLoader(
+            retino_subset,
+            batch_size=args.batch_size or cfg.get("batch_size", 32),
+            shuffle=False,
+            num_workers=args.test_num_workers,
+            pin_memory=cfg.get("pin_memory", False),
+        )
+
+        split_name_retino = "retinotopic_a_test"
+        retino_eval = trainer.evaluate_metrics(retino_loader, split_name=split_name_retino)
+        retino_temporal = trainer.evaluate_metrics_over_time(
+            retino_loader,
+            split_name=split_name_retino,
+            save_dir=str(retino_dir),
+        )
+
+        # Retinotopic sample plots (same defaults as main subset: up to 10 samples)
+        n_vis_r = min(10, len(retino_indices))
+        vis_indices_r = random.Random(args.seed).sample(retino_indices, k=n_vis_r) if n_vis_r > 0 else []
+        vis_subset_r = Subset(test_loader.dataset, vis_indices_r)
+        vis_loader_r = DataLoader(
+            vis_subset_r,
+            batch_size=1,
+            shuffle=False,
+            num_workers=args.test_num_workers,
+            pin_memory=cfg.get("pin_memory", False),
+        )
+        vis_dir_r = retino_dir / "plots"
+        vis_dir_r.mkdir(parents=True, exist_ok=True)
+        save_test_reconstruction_figure(
+            model=model,
+            test_loader=vis_loader_r,
+            device=device,
+            out_dir=str(vis_dir_r),
+            split_name=split_name_retino,
+            num_batches=n_vis_r,
+            max_frames_per_clip=max_frames,
+            plot_masked=False,
+        )
+        save_test_reconstruction_figure(
+            model=model,
+            test_loader=vis_loader_r,
+            device=device,
+            out_dir=str(vis_dir_r),
+            split_name=split_name_retino,
+            num_batches=n_vis_r,
+            max_frames_per_clip=max_frames,
+            plot_masked=True,
+        )
+
+        retino_summary = {
+            "pattern": r"session_\\d{6}a_condsAN\\.h5$",
+            "matched_indices": len(retino_indices),
+            "eval_metrics": retino_eval,
+            "temporal_start_frames": sorted(list(retino_temporal.keys())),
+        }
+        with open(retino_dir / "retinotopic_summary.json", "w") as f:
+            json.dump(retino_summary, f, indent=2, default=str)
+
+        print(
+            f"[eval_specific_subset] Retinotopic subset done. Results saved to: {retino_dir} "
+            f"(matched samples: {len(retino_indices)})"
+        )
 
 
 if __name__ == "__main__":
