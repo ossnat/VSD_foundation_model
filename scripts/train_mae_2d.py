@@ -191,6 +191,18 @@ def main(argv: Optional[List[str]] = None) -> None:
         )
         cfg["model"] = "mae_2d"
 
+    # MAE 2D expects single-frame inputs (B, C, H, W).
+    # If clip_length > 1 is requested, DataLoader yields (B, C, T, H, W),
+    # which will fail in Conv2d backbones.
+    if int(cfg.get("clip_length", 1)) > 1:
+        requested_clip = cfg.get("clip_length")
+        print(
+            "[train_mae_2d] Warning: clip_length "
+            f"{requested_clip} is incompatible with model='mae_2d'. "
+            "Forcing clip_length=1. Use scripts/train_mae_2d_lstm.py for clip_length>1."
+        )
+        cfg["clip_length"] = 1
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[train_mae_2d] Using device: {device}")
 
