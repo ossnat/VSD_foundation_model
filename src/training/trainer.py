@@ -186,6 +186,7 @@ class Trainer:
         all_start_frames = []
         all_mse = []
         all_r2 = []
+        all_ss_tot = []
         all_ssim = []
 
         with torch.no_grad():
@@ -206,11 +207,21 @@ class Trainer:
                     start_frames = list(start_frames)
                 mse_list = out["mse_per_sample"].cpu().tolist()
                 r2_list = out["r2_per_sample"].cpu().tolist()
+                ss_tot_list = out.get("ss_tot_per_sample", None)
+                if ss_tot_list is not None:
+                    if torch.is_tensor(ss_tot_list):
+                        ss_tot_list = ss_tot_list.cpu().tolist()
+                    else:
+                        ss_tot_list = list(ss_tot_list)
+                else:
+                    # Keep array lengths aligned for aggregation.
+                    ss_tot_list = [None] * len(mse_list)
                 ssim_list = out["ssim_per_sample"].cpu().tolist()
                 all_start_frames.extend(start_frames)
                 all_mse.extend(mse_list)
                 all_r2.extend(r2_list)
                 all_ssim.extend(ssim_list)
+                all_ss_tot.extend(ss_tot_list)
 
         if not all_start_frames:
             print(f"evaluate_metrics_over_time: no samples collected for {split_name}.")
@@ -220,10 +231,13 @@ class Trainer:
         by_start_mse = defaultdict(list)
         by_start_r2 = defaultdict(list)
         by_start_ssim = defaultdict(list)
-        for s, m, r2, sm in zip(all_start_frames, all_mse, all_r2, all_ssim):
+        by_start_ss_tot = defaultdict(list)
+        for s, m, r2, sm, ss_tot in zip(all_start_frames, all_mse, all_r2, all_ssim, all_ss_tot):
             by_start_mse[s].append(m)
             by_start_r2[s].append(r2)
             by_start_ssim[s].append(sm)
+            if ss_tot is not None:
+                by_start_ss_tot[s].append(ss_tot)
 
         result = {}
         for start_frame in sorted(by_start_mse.keys()):
@@ -241,6 +255,15 @@ class Trainer:
             std_ssim = math.sqrt(
                 sum((x - mean_ssim) ** 2 for x in ssim_vals) / len(ssim_vals)
             ) if len(ssim_vals) > 1 else 0.0
+            ss_tot_vals = by_start_ss_tot.get(start_frame, [])
+            if ss_tot_vals:
+                mean_ss_tot = sum(ss_tot_vals) / len(ss_tot_vals)
+                std_ss_tot = math.sqrt(
+                    sum((x - mean_ss_tot) ** 2 for x in ss_tot_vals) / len(ss_tot_vals)
+                ) if len(ss_tot_vals) > 1 else 0.0
+            else:
+                mean_ss_tot = None
+                std_ss_tot = None
             result[start_frame] = {
                 "mean_mse": mean_mse,
                 "std_mse": std_mse,
@@ -249,6 +272,8 @@ class Trainer:
                 "std_r2_masked": std_r2,
                 "mean_ssim_masked": mean_ssim,
                 "std_ssim_masked": std_ssim,
+                "mean_ss_tot_masked": mean_ss_tot,
+                "std_ss_tot_masked": std_ss_tot,
                 "count": len(vals),
             }
 

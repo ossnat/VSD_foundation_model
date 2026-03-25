@@ -159,6 +159,7 @@ class MAESystem(BaseSystem):
         # Compute additional metrics for logging (z-score recon and target so MSE/PSNR are scale-invariant)
         mse_per_sample = None
         r2_per_sample = None
+        ss_tot_per_sample = None
         ssim_per_sample = None
         with torch.no_grad():
             eps = 1e-8
@@ -197,6 +198,7 @@ class MAESystem(BaseSystem):
             if batch.get("_return_per_sample_metrics") and agg is not None:
                 mse_per_sample = agg["mse_masked_per_sample"]
                 r2_per_sample = agg["r2_masked_per_sample"]
+                ss_tot_per_sample = agg.get("ss_tot_masked_per_sample", None)
                 ssim_per_sample = agg["ssim_masked_per_sample"]
 
         metrics = {
@@ -214,6 +216,8 @@ class MAESystem(BaseSystem):
             out["mse_per_sample"] = mse_per_sample
         if r2_per_sample is not None:
             out["r2_per_sample"] = r2_per_sample
+        if ss_tot_per_sample is not None:
+            out["ss_tot_per_sample"] = ss_tot_per_sample
         if ssim_per_sample is not None:
             out["ssim_per_sample"] = ssim_per_sample
         return out

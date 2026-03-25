@@ -153,11 +153,16 @@ def aggregate_batch_metrics(
     weight: torch.Tensor,
 ) -> Dict[str, torch.Tensor]:
     """Batch means for mse_masked, r2_masked, ssim_masked (masked pixels only)."""
-    mse_ps, r2_ps, _ = masked_mse_r2_per_sample(recon_norm, target_norm, weight)
+    mse_ps, r2_ps, ss_tot_ps = masked_mse_r2_per_sample(recon_norm, target_norm, weight)
     ssim_ps = masked_ssim_per_sample(recon_norm, target_norm, weight)
     return {
         "mse_masked": mse_ps.mean(),
         "r2_masked": r2_ps.mean(),
+        # Used as the denominator term for R²:
+        # SS_tot = sum(w * (y - mean_y)^2) on masked pixels.
+        # Returned per-sample so temporal eval can debug R² dips.
+        "ss_tot_masked_per_sample": ss_tot_ps,
+        "ss_tot_masked": ss_tot_ps.mean(),
         "ssim_masked": ssim_ps.mean(),
         "mse_masked_per_sample": mse_ps,
         "r2_masked_per_sample": r2_ps,
