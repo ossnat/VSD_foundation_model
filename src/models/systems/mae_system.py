@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .base_system import BaseSystem
+from src.training.mae_masked_metrics import aggregate_batch_metrics
 
 
 class MAELoss(nn.Module):
@@ -157,6 +158,9 @@ class MAESystem(BaseSystem):
         
         # Compute additional metrics for logging (z-score recon and target so MSE/PSNR are scale-invariant)
         mse_per_sample = None
+        r2_per_sample = None
+        ss_tot_per_sample = None
+        ssim_per_sample = None
         with torch.no_grad():
             eps = 1e-8
             # Z-score reconstruction and target per batch so we compare two normalized populations
@@ -170,26 +174,52 @@ class MAESystem(BaseSystem):
 
             # MSE on masked regions only
             loss_per_elem = (recon_norm - target_norm).pow(2)
-            mse_masked = (loss_per_elem * (1 - mask)).sum() / ((1 - mask).sum() + eps)
+            weight = 1.0 - mask
+            if self.loss_fn.crop_loss is not None:
+                H, W = video_target.shape[-2], video_target.shape[-1]
+                region = self.loss_fn._build_region_mask(H, W, video_target.device)
+                if weight.dim() == 5:
+                    region = region.unsqueeze(2).expand_as(weight)
+                weight = weight * region
+
+            mse_masked = (loss_per_elem * weight).sum() / (weight.sum() + eps)
             mse_visible = (loss_per_elem * mask).sum() / (mask.sum() + eps)
 
-            # Optional: per-sample MSE (B,) for temporal evaluation
-            if batch.get("_return_per_sample_metrics"):
-                B = reconstruction.shape[0]
-                mse_per_sample = loss_per_elem.reshape(B, -1).mean(dim=1)  # (B,)
-        
+            agg = None
+            if batch.get("_return_per_sample_metrics") or batch.get("_extended_test_metrics"):
+                agg = aggregate_batch_metrics(recon_norm, target_norm, weight)
+                metrics_extra = {
+                    "r2_masked": agg["r2_masked"].item(),
+                    "ssim_masked": agg["ssim_masked"].item(),
+                }
+            else:
+                metrics_extra = {}
+
+            if batch.get("_return_per_sample_metrics") and agg is not None:
+                mse_per_sample = agg["mse_masked_per_sample"]
+                r2_per_sample = agg["r2_masked_per_sample"]
+                ss_tot_per_sample = agg.get("ss_tot_masked_per_sample", None)
+                ssim_per_sample = agg["ssim_masked_per_sample"]
+
         metrics = {
             "mse_overall": mse_overall.item(),
             "mse_masked": mse_masked.item(),
             "mse_visible": mse_visible.item(),
         }
-        
+        metrics.update(metrics_extra)
+
         out = {
             "loss": loss,
             "metrics": metrics
         }
         if mse_per_sample is not None:
             out["mse_per_sample"] = mse_per_sample
+        if r2_per_sample is not None:
+            out["r2_per_sample"] = r2_per_sample
+        if ss_tot_per_sample is not None:
+            out["ss_tot_per_sample"] = ss_tot_per_sample
+        if ssim_per_sample is not None:
+            out["ssim_per_sample"] = ssim_per_sample
         return out
     
     def get_optimizer(self, lr=None, weight_decay=None):

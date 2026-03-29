@@ -39,6 +39,12 @@ def _parse_overrides_from_args(args: argparse.Namespace) -> Dict[str, Any]:
         overrides["epochs"] = args.epochs
     if args.batch_size is not None:
         overrides["batch_size"] = args.batch_size
+    if args.patch_size is not None:
+        overrides["patch_size"] = list(args.patch_size)
+    if args.frame_start is not None:
+        overrides["frame_start"] = args.frame_start
+    if args.frame_end is not None:
+        overrides["frame_end"] = args.frame_end
     return overrides
 
 
@@ -80,6 +86,26 @@ def main() -> None:
         type=int,
         default=None,
         help="Override batch_size in config (also used for loaders if provided).",
+    )
+    parser.add_argument(
+        "--patch-size",
+        type=int,
+        nargs=3,
+        metavar=("T", "H", "W"),
+        default=None,
+        help="Override patch_size as three integers, e.g. --patch-size 4 8 8 (matches YAML [T,H,W]).",
+    )
+    parser.add_argument(
+        "--frame-start",
+        type=int,
+        default=None,
+        help="Override frame_start in config (inclusive frame index).",
+    )
+    parser.add_argument(
+        "--frame-end",
+        type=int,
+        default=None,
+        help="Override frame_end in config (exclusive end index, same semantics as YAML).",
     )
     parser.add_argument(
         "--train-num-workers",

@@ -83,6 +83,10 @@ def build_ssl_model(cfg):
                 "crop_loss": cfg.get("crop_loss", None),
                 "crop_loss_radius": cfg.get("crop_loss_radius", 30),
             },
+            "training": {
+                "lr": cfg.get("lr", 1e-4),
+                "weight_decay": cfg.get("weight_decay", 0.05),
+            },
         }
 
         return MAESystem(encoder=encoder, decoder=decoder, config=mae_config)

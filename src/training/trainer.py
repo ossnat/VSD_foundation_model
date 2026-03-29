@@ -42,6 +42,9 @@ class Trainer:
         fig = None
         ax = None
         line = None
+        # Epoch-level loss history (used for saved plots/analysis)
+        train_loss_epoch_history = []
+        val_loss_epoch_history = []
 
         # Validation schedule: "epoch" (default) or "step"
         val_mode = self.cfg.get("val_mode", "epoch")
@@ -81,6 +84,7 @@ class Trainer:
             mean_train_loss = sum(train_losses_epoch) / len(train_losses_epoch) if train_losses_epoch else 0.0
             self.logger.log_scalar("train/loss_epoch", mean_train_loss, epoch)
             print(f"  train/loss: {mean_train_loss:.4f}")
+            train_loss_epoch_history.append(mean_train_loss)
 
             # Validation (optional)
             if val_loader is not None:
@@ -94,10 +98,20 @@ class Trainer:
                         mean_val_loss = sum(val_losses) / len(val_losses)
                         self.logger.log_scalar("val/loss", mean_val_loss, epoch)
                         print(f"  val/loss: {mean_val_loss:.4f}")
+                        val_loss_epoch_history.append(mean_val_loss)
+                    else:
+                        val_loss_epoch_history.append(None)
+            else:
+                val_loss_epoch_history.append(None)
 
             # Save checkpoint each epoch
             ckpt_path = os.path.join(self.cfg.get("ckpt_dir","checkpoints"), f"epoch_{epoch+1}.pt")
             torch.save(self.model.state_dict(), ckpt_path)
+
+        return {
+            "train_loss_epoch": train_loss_epoch_history,
+            "val_loss_epoch": val_loss_epoch_history,
+        }
 
     def evaluate_metrics(self, loader, split_name: str = "train") -> dict:
         """
@@ -111,9 +125,12 @@ class Trainer:
         all_losses = []
         all_metrics = []  # list of dicts per batch
 
+        # For MAE we can compute the extra masked metrics (R2/SSIM) without needing
+        # a separate code path; do it for test and also for validation.
+        extended_test = split_name in ("test", "val")
         with torch.no_grad():
             for batch in tqdm(loader, desc=f"Evaluating ({split_name})"):
-                out = self._model_forward_for_metrics(batch)
+                out = self._model_forward_for_metrics(batch, extended_test_metrics=extended_test)
                 if out is None:
                     continue
                 if torch.is_tensor(out):
@@ -142,6 +159,8 @@ class Trainer:
             result["psnr_db"] = 10.0 * math.log10(1.0 / result["mse_overall"] + 1e-10)
         if "mse_masked" in result and result["mse_masked"] > 0:
             result["psnr_masked_db"] = 10.0 * math.log10(1.0 / result["mse_masked"] + 1e-10)
+        if "mse_masked" in result and result["mse_masked"] > 0:
+            result["rmse_masked"] = math.sqrt(result["mse_masked"])
 
         # Print to screen
         print(f"\n--- Metrics ({split_name}) ---")
@@ -166,6 +185,9 @@ class Trainer:
         self.model.eval()
         all_start_frames = []
         all_mse = []
+        all_r2 = []
+        all_ss_tot = []
+        all_ssim = []
 
         with torch.no_grad():
             for batch in tqdm(loader, desc=f"Eval over time ({split_name})"):
@@ -175,7 +197,7 @@ class Trainer:
                     print("evaluate_metrics_over_time: batch missing 'start_frame'; skipping.")
                     continue
                 batch_with_flag = {**batch, "_return_per_sample_metrics": True}
-                out = self._model_forward_for_metrics(batch_with_flag)
+                out = self._model_forward_for_metrics(batch_with_flag, extended_test_metrics=True)
                 if out is None or not isinstance(out, dict) or "mse_per_sample" not in out:
                     continue
                 start_frames = batch["start_frame"]
@@ -184,38 +206,90 @@ class Trainer:
                 else:
                     start_frames = list(start_frames)
                 mse_list = out["mse_per_sample"].cpu().tolist()
+                r2_list = out["r2_per_sample"].cpu().tolist()
+                ss_tot_list = out.get("ss_tot_per_sample", None)
+                if ss_tot_list is not None:
+                    if torch.is_tensor(ss_tot_list):
+                        ss_tot_list = ss_tot_list.cpu().tolist()
+                    else:
+                        ss_tot_list = list(ss_tot_list)
+                else:
+                    # Keep array lengths aligned for aggregation.
+                    ss_tot_list = [None] * len(mse_list)
+                ssim_list = out["ssim_per_sample"].cpu().tolist()
                 all_start_frames.extend(start_frames)
                 all_mse.extend(mse_list)
+                all_r2.extend(r2_list)
+                all_ssim.extend(ssim_list)
+                all_ss_tot.extend(ss_tot_list)
 
         if not all_start_frames:
             print(f"evaluate_metrics_over_time: no samples collected for {split_name}.")
             return {}
 
-        # Aggregate by start_frame
-        by_start = defaultdict(list)
-        for s, m in zip(all_start_frames, all_mse):
-            by_start[s].append(m)
+        # Aggregate by start_frame (MSE, R², SSIM — all masked-pixel metrics)
+        by_start_mse = defaultdict(list)
+        by_start_r2 = defaultdict(list)
+        by_start_ssim = defaultdict(list)
+        by_start_ss_tot = defaultdict(list)
+        for s, m, r2, sm, ss_tot in zip(all_start_frames, all_mse, all_r2, all_ssim, all_ss_tot):
+            by_start_mse[s].append(m)
+            by_start_r2[s].append(r2)
+            by_start_ssim[s].append(sm)
+            if ss_tot is not None:
+                by_start_ss_tot[s].append(ss_tot)
 
         result = {}
-        for start_frame in sorted(by_start.keys()):
-            vals = by_start[start_frame]
+        for start_frame in sorted(by_start_mse.keys()):
+            vals = by_start_mse[start_frame]
             mean_mse = sum(vals) / len(vals)
             variance = sum((x - mean_mse) ** 2 for x in vals) / len(vals) if len(vals) > 1 else 0.0
             std_mse = math.sqrt(variance)
+            r2_vals = by_start_r2[start_frame]
+            mean_r2 = sum(r2_vals) / len(r2_vals)
+            std_r2 = math.sqrt(
+                sum((x - mean_r2) ** 2 for x in r2_vals) / len(r2_vals)
+            ) if len(r2_vals) > 1 else 0.0
+            ssim_vals = by_start_ssim[start_frame]
+            mean_ssim = sum(ssim_vals) / len(ssim_vals)
+            std_ssim = math.sqrt(
+                sum((x - mean_ssim) ** 2 for x in ssim_vals) / len(ssim_vals)
+            ) if len(ssim_vals) > 1 else 0.0
+            ss_tot_vals = by_start_ss_tot.get(start_frame, [])
+            if ss_tot_vals:
+                mean_ss_tot = sum(ss_tot_vals) / len(ss_tot_vals)
+                std_ss_tot = math.sqrt(
+                    sum((x - mean_ss_tot) ** 2 for x in ss_tot_vals) / len(ss_tot_vals)
+                ) if len(ss_tot_vals) > 1 else 0.0
+            else:
+                mean_ss_tot = None
+                std_ss_tot = None
             result[start_frame] = {
                 "mean_mse": mean_mse,
                 "std_mse": std_mse,
                 "mean_rmse": math.sqrt(mean_mse),
+                "mean_r2_masked": mean_r2,
+                "std_r2_masked": std_r2,
+                "mean_ssim_masked": mean_ssim,
+                "std_ssim_masked": std_ssim,
+                "mean_ss_tot_masked": mean_ss_tot,
+                "std_ss_tot_masked": std_ss_tot,
                 "count": len(vals),
             }
 
         # Print table
         print(f"\n--- Metrics over time ({split_name}) ---")
-        print(f"{'start_frame':<12} {'mean_mse':<12} {'mean_rmse':<12} {'std_mse':<10} {'count':<8}")
-        print("-" * 54)
+        print(
+            f"{'start_frame':<12} {'mean_mse':<12} {'mean_rmse':<12} {'mean_R2':<12} "
+            f"{'mean_SSIM':<12} {'count':<8}"
+        )
+        print("-" * 84)
         for start_frame in sorted(result.keys()):
             r = result[start_frame]
-            print(f"{start_frame:<12} {r['mean_mse']:<12.6f} {r['mean_rmse']:<12.6f} {r['std_mse']:<10.6f} {r['count']:<8}")
+            print(
+                f"{start_frame:<12} {r['mean_mse']:<12.6f} {r['mean_rmse']:<12.6f} "
+                f"{r['mean_r2_masked']:<12.6f} {r['mean_ssim_masked']:<12.6f} {r['count']:<8}"
+            )
         print("---\n")
 
         # Save to results dir: JSON (metrics) + PNG (plot)
@@ -232,20 +306,33 @@ class Trainer:
         print(f"Saved temporal metrics to {json_path}")
 
         if plt is not None:
-            fig, axes = plt.subplots(2, 1, figsize=(8, 8), sharex=True)
             x = sorted(result.keys())
             mean_mse = [result[sf]["mean_mse"] for sf in x]
             std_mse = [result[sf]["std_mse"] for sf in x]
             mean_rmse = [result[sf]["mean_rmse"] for sf in x]
+            mean_r2 = [result[sf]["mean_r2_masked"] for sf in x]
+            std_r2 = [result[sf]["std_r2_masked"] for sf in x]
+            mean_ssim = [result[sf]["mean_ssim_masked"] for sf in x]
+            std_ssim = [result[sf]["std_ssim_masked"] for sf in x]
+
+            fig, axes = plt.subplots(4, 1, figsize=(8, 14), sharex=True)
             axes[0].errorbar(x, mean_mse, yerr=std_mse, capsize=3, marker="o", linestyle="-")
-            axes[0].set_ylabel("MSE")
-            axes[0].set_title(f"Reconstruction MSE over time ({split_name})")
+            axes[0].set_ylabel("MSE (masked)")
+            axes[0].set_title(f"Masked MSE over time ({split_name})")
             axes[0].grid(True, alpha=0.3)
             axes[1].plot(x, mean_rmse, marker="o", linestyle="-")
-            axes[1].set_xlabel("Clip start frame")
-            axes[1].set_ylabel("RMSE")
-            axes[1].set_title(f"Reconstruction RMSE over time ({split_name})")
+            axes[1].set_ylabel("RMSE (masked)")
+            axes[1].set_title(f"Masked RMSE over time ({split_name})")
             axes[1].grid(True, alpha=0.3)
+            axes[2].errorbar(x, mean_r2, yerr=std_r2, capsize=3, marker="o", linestyle="-")
+            axes[2].set_ylabel("R² (masked)")
+            axes[2].set_title(f"Masked R² over time ({split_name})")
+            axes[2].grid(True, alpha=0.3)
+            axes[3].errorbar(x, mean_ssim, yerr=std_ssim, capsize=3, marker="o", linestyle="-")
+            axes[3].set_xlabel("Clip start frame")
+            axes[3].set_ylabel("SSIM (masked)")
+            axes[3].set_title(f"Masked SSIM over time ({split_name})")
+            axes[3].grid(True, alpha=0.3)
             fig.tight_layout()
             fig.savefig(plot_path, dpi=150, bbox_inches="tight")
             plt.close(fig)
@@ -255,7 +342,7 @@ class Trainer:
 
         return result
 
-    def _model_forward_for_metrics(self, batch):
+    def _model_forward_for_metrics(self, batch, extended_test_metrics: bool = False):
         """Run model on batch and return full output (dict or tensor). Used by evaluate_metrics."""
         # Same batch routing as _forward_and_loss, but return full output
         if isinstance(batch, (list, tuple)):
@@ -267,6 +354,8 @@ class Trainer:
                 return self.model(crops)
             if "video_masked" in batch and "video_target" in batch and "mask" in batch:
                 mae_batch = {k: v.to(self.device) if torch.is_tensor(v) else v for k, v in batch.items()}
+                if extended_test_metrics:
+                    mae_batch["_extended_test_metrics"] = True
                 return self.model(mae_batch)
             if "video" in batch:
                 return self.model(batch["video"].to(self.device))
