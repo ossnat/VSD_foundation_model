@@ -14,6 +14,10 @@ lstm_hidden: 256
 normalize_loss: true
 input_height: 100
 input_width: 100
+loss_type: "l1_ssim"        # "mse" | "l1" | "l1_ssim" | "mse_ssim"
+alpha: 0.84                # only used for *_ssim variants
+ssim_window_size: 11
+ssim_sigma: 1.5
 
 # --- Data (video clips for temporal model) ---
 dataset_name: vsd_mae

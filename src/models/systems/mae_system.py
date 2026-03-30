@@ -3,22 +3,36 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .base_system import BaseSystem
-from src.training.mae_masked_metrics import aggregate_batch_metrics
+from src.training.mae_masked_metrics import aggregate_batch_metrics, masked_ssim_per_sample
 
 
 class MAELoss(nn.Module):
     """
     Reconstruction loss for Masked Autoencoders.
-    Computes MSE only on masked patches, optionally restricted to a
-    centered spatial region (circle or square).
+    Computes reconstruction losses on masked patches only, optionally restricted
+    to a centered spatial region (circle or square).
+
+    Supported loss types:
+      - mse:          masked MSE
+      - l1:           masked L1
+      - l1_ssim:      alpha * (1 - masked_ssim) + (1-alpha) * masked_L1
+      - mse_ssim:     alpha * (1 - masked_ssim) + (1-alpha) * masked_MSE
     """
     def __init__(self, normalize: bool = True,
                  crop_loss: str = None,
-                 crop_loss_radius: int = 30):
+                 crop_loss_radius: int = 30,
+                 loss_type: str = "mse",
+                 alpha: float = 0.84,
+                 ssim_window_size: int = 11,
+                 ssim_sigma: float = 1.5):
         super().__init__()
         self.normalize = normalize
         self.crop_loss = crop_loss            # None | "circle" | "square"
         self.crop_loss_radius = crop_loss_radius
+        self.loss_type = str(loss_type).lower().strip()
+        self.alpha = float(alpha)
+        self.ssim_window_size = int(ssim_window_size)
+        self.ssim_sigma = float(ssim_sigma)
         self._region_cache: dict = {}
 
     def _build_region_mask(self, H: int, W: int, device: torch.device) -> torch.Tensor:
@@ -58,19 +72,51 @@ class MAELoss(nn.Module):
             MSE loss computed only on masked patches (within the crop region
             when crop_loss is set).
         """
-        loss_per_element = F.mse_loss(reconstruction, target, reduction='none')
+        eps = 1e-8
+        if self.loss_type not in ("mse", "l1", "l1_ssim", "mse_ssim"):
+            raise ValueError(
+                f"Unknown loss_type={self.loss_type!r}. "
+                "Expected one of: mse, l1, l1_ssim, mse_ssim."
+            )
 
         # weight = 1 where the patch was masked (mask==0 means masked)
-        weight = 1 - mask
+        weight = 1.0 - mask
 
         if self.crop_loss is not None:
             H, W = target.shape[-2], target.shape[-1]
             region = self._build_region_mask(H, W, target.device)
             weight = weight * region
 
-        masked_loss = loss_per_element * weight
-        loss = masked_loss.sum() / (weight.sum() + 1e-8)
-        return loss
+        # Pixel fidelity term
+        if self.loss_type in ("mse", "mse_ssim"):
+            pixel_loss_per_element = F.mse_loss(reconstruction, target, reduction="none")
+            pixel_loss = (pixel_loss_per_element * weight).sum() / (weight.sum() + eps)
+        elif self.loss_type in ("l1", "l1_ssim"):
+            pixel_loss_per_element = F.l1_loss(reconstruction, target, reduction="none")
+            pixel_loss = (pixel_loss_per_element * weight).sum() / (weight.sum() + eps)
+        else:
+            # Defensive: should be unreachable due to loss_type check above.
+            raise RuntimeError(f"Unhandled loss_type={self.loss_type!r}")
+
+        # SSIM term (only for *_ssim variants)
+        if self.loss_type in ("l1_ssim", "mse_ssim"):
+            # masked_ssim_per_sample expects weight where >0 includes pixels to consider.
+            # It returns SSIM per-sample averaged over masked pixels only.
+            ssim_ps = masked_ssim_per_sample(
+                recon_norm=reconstruction,
+                target_norm=target,
+                weight=weight,
+                window_size=self.ssim_window_size,
+                sigma=self.ssim_sigma,
+            )  # (B,)
+            ssim_loss = (1.0 - ssim_ps).mean()
+
+            # Zhao et al. style mixing: alpha*(1-SSIM) + (1-alpha)*pixel_loss
+            alpha = max(0.0, min(1.0, self.alpha))
+            loss = alpha * ssim_loss + (1.0 - alpha) * pixel_loss
+            return loss
+
+        return pixel_loss
 
 
 class MAESystem(BaseSystem):
@@ -96,6 +142,10 @@ class MAESystem(BaseSystem):
             normalize=loss_cfg.get("normalize", True),
             crop_loss=loss_cfg.get("crop_loss", None),
             crop_loss_radius=loss_cfg.get("crop_loss_radius", 30),
+            loss_type=loss_cfg.get("loss_type", "mse"),
+            alpha=loss_cfg.get("alpha", 0.84),
+            ssim_window_size=loss_cfg.get("ssim_window_size", 11),
+            ssim_sigma=loss_cfg.get("ssim_sigma", 1.5),
         )
         
         # Training config

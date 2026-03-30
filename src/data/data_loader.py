@@ -89,6 +89,16 @@ def load_dataset(cfg: Dict[str, Any],
     batch_size = batch_size or cfg.get('batch_size', 4)
     num_workers = num_workers if num_workers is not None else cfg.get('num_workers', 0)
     shuffle = shuffle if shuffle is not None else cfg.get('shuffle', split == 'train')
+
+    # Avoid spawning pin-memory machinery on CPU-only runs.
+    # This is a no-op for performance (PyTorch warns it won't be used anyway),
+    # and it prevents occasional shutdown issues on some Python/PyTorch builds.
+    try:
+        import torch
+
+        pin_memory = bool(cfg.get('pin_memory', False)) and torch.cuda.is_available()
+    except Exception:
+        pin_memory = bool(cfg.get('pin_memory', False))
     
     # Create DataLoader
     loader = DataLoader(
@@ -96,7 +106,7 @@ def load_dataset(cfg: Dict[str, Any],
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
-        pin_memory=cfg.get('pin_memory', False)
+        pin_memory=pin_memory,
     )
     
     return loader
