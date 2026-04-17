@@ -15,6 +15,7 @@ class MAELoss(nn.Module):
     Supported loss types:
       - mse:          masked MSE
       - l1:           masked L1
+      - l1_mse:       alpha * masked_L1 + (1-alpha) * masked_MSE
       - l1_ssim:      alpha * (1 - masked_ssim) + (1-alpha) * masked_L1
       - mse_ssim:     alpha * (1 - masked_ssim) + (1-alpha) * masked_MSE
     """
@@ -73,10 +74,10 @@ class MAELoss(nn.Module):
             when crop_loss is set).
         """
         eps = 1e-8
-        if self.loss_type not in ("mse", "l1", "l1_ssim", "mse_ssim"):
+        if self.loss_type not in ("mse", "l1", "l1_mse", "l1_ssim", "mse_ssim"):
             raise ValueError(
                 f"Unknown loss_type={self.loss_type!r}. "
-                "Expected one of: mse, l1, l1_ssim, mse_ssim."
+                "Expected one of: mse, l1, l1_mse, l1_ssim, mse_ssim."
             )
 
         # weight = 1 where the patch was masked (mask==0 means masked)
@@ -87,36 +88,50 @@ class MAELoss(nn.Module):
             region = self._build_region_mask(H, W, target.device)
             weight = weight * region
 
-        # Pixel fidelity term
-        if self.loss_type in ("mse", "mse_ssim"):
-            pixel_loss_per_element = F.mse_loss(reconstruction, target, reduction="none")
-            pixel_loss = (pixel_loss_per_element * weight).sum() / (weight.sum() + eps)
-        elif self.loss_type in ("l1", "l1_ssim"):
-            pixel_loss_per_element = F.l1_loss(reconstruction, target, reduction="none")
-            pixel_loss = (pixel_loss_per_element * weight).sum() / (weight.sum() + eps)
+        # Pixel fidelity terms
+        if self.loss_type in ("mse", "mse_ssim", "l1_mse"):
+            mse_per_element = F.mse_loss(reconstruction, target, reduction="none")
+            mse_loss = (mse_per_element * weight).sum() / (weight.sum() + eps)
+        else:
+            mse_loss = None
+        if self.loss_type in ("l1", "l1_ssim", "l1_mse"):
+            l1_per_element = F.l1_loss(reconstruction, target, reduction="none")
+            l1_loss = (l1_per_element * weight).sum() / (weight.sum() + eps)
+        else:
+            l1_loss = None
+
+        if self.loss_type == "mse":
+            return mse_loss
+        if self.loss_type == "l1":
+            return l1_loss
+        if self.loss_type == "l1_mse":
+            alpha = max(0.0, min(1.0, self.alpha))
+            return alpha * l1_loss + (1.0 - alpha) * mse_loss
+
+        if self.loss_type == "mse_ssim":
+            pixel_loss = mse_loss
+        elif self.loss_type == "l1_ssim":
+            pixel_loss = l1_loss
         else:
             # Defensive: should be unreachable due to loss_type check above.
             raise RuntimeError(f"Unhandled loss_type={self.loss_type!r}")
 
         # SSIM term (only for *_ssim variants)
-        if self.loss_type in ("l1_ssim", "mse_ssim"):
-            # masked_ssim_per_sample expects weight where >0 includes pixels to consider.
-            # It returns SSIM per-sample averaged over masked pixels only.
-            ssim_ps = masked_ssim_per_sample(
-                recon_norm=reconstruction,
-                target_norm=target,
-                weight=weight,
-                window_size=self.ssim_window_size,
-                sigma=self.ssim_sigma,
-            )  # (B,)
-            ssim_loss = (1.0 - ssim_ps).mean()
+        # masked_ssim_per_sample expects weight where >0 includes pixels to consider.
+        # It returns SSIM per-sample averaged over masked pixels only.
+        ssim_ps = masked_ssim_per_sample(
+            recon_norm=reconstruction,
+            target_norm=target,
+            weight=weight,
+            window_size=self.ssim_window_size,
+            sigma=self.ssim_sigma,
+        )  # (B,)
+        ssim_loss = (1.0 - ssim_ps).mean()
 
-            # Zhao et al. style mixing: alpha*(1-SSIM) + (1-alpha)*pixel_loss
-            alpha = max(0.0, min(1.0, self.alpha))
-            loss = alpha * ssim_loss + (1.0 - alpha) * pixel_loss
-            return loss
-
-        return pixel_loss
+        # Zhao et al. style mixing: alpha*(1-SSIM) + (1-alpha)*pixel_loss
+        alpha = max(0.0, min(1.0, self.alpha))
+        loss = alpha * ssim_loss + (1.0 - alpha) * pixel_loss
+        return loss
 
 
 class MAESystem(BaseSystem):
