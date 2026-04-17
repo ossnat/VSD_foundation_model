@@ -292,6 +292,7 @@ def _run_single_trial(
     model: str,
     loss_type: str,
     hp: Dict[str, Any],
+    prebuilt_loaders: Optional[Tuple[DataLoader, DataLoader, DataLoader]] = None,
 ) -> TrialRecord:
     set_seed(trial_seed)
     overrides = _build_trial_overrides(args, model=model, loss_type=loss_type, hp=hp)
@@ -308,17 +309,20 @@ def _run_single_trial(
     os.makedirs(cfg["log_dir"], exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    train_loader, val_loader, test_loader = build_dataloaders(
-        cfg,
-        project_root=project_root,
-        batch_size=args.batch_size,
-        train_num_workers=args.train_num_workers,
-        val_num_workers=args.val_num_workers,
-        test_num_workers=args.test_num_workers,
-    )
-    train_loader = _subset_loader(train_loader, args.max_train_samples, num_workers=args.train_num_workers)
-    val_loader = _subset_loader(val_loader, args.max_val_samples, num_workers=args.val_num_workers)
-    test_loader = _subset_loader(test_loader, args.max_test_samples, num_workers=args.test_num_workers)
+    if prebuilt_loaders is None:
+        train_loader, val_loader, test_loader = build_dataloaders(
+            cfg,
+            project_root=project_root,
+            batch_size=args.batch_size,
+            train_num_workers=args.train_num_workers,
+            val_num_workers=args.val_num_workers,
+            test_num_workers=args.test_num_workers,
+        )
+        train_loader = _subset_loader(train_loader, args.max_train_samples, num_workers=args.train_num_workers)
+        val_loader = _subset_loader(val_loader, args.max_val_samples, num_workers=args.val_num_workers)
+        test_loader = _subset_loader(test_loader, args.max_test_samples, num_workers=args.test_num_workers)
+    else:
+        train_loader, val_loader, test_loader = prebuilt_loaders
 
     model_obj = build_ssl_model(cfg).to(device)
     trainer = Trainer(model=model_obj, logger=TBLogger(log_dir=cfg["log_dir"]), cfg=cfg, device=device)
@@ -344,6 +348,37 @@ def _run_single_trial(
         trial_dir=str(trial_dir),
     )
     return rec
+
+
+def _build_cached_loaders_for_model(
+    project_root: Path,
+    base_config: str,
+    args: argparse.Namespace,
+    model: str,
+) -> Tuple[DataLoader, DataLoader, DataLoader]:
+    """
+    Build and subset train/val/test loaders once per model and reuse across trials.
+    This avoids repeated CPU preload cost in HPO loops.
+    """
+    data_overrides = _build_trial_overrides(args, model=model, loss_type="mse", hp={})
+    cfg_data = load_and_prepare_config(
+        base_cfg_path=base_config,
+        project_root=project_root,
+        data_root=None,
+        overrides=data_overrides,
+    )
+    train_loader, val_loader, test_loader = build_dataloaders(
+        cfg_data,
+        project_root=project_root,
+        batch_size=args.batch_size,
+        train_num_workers=args.train_num_workers,
+        val_num_workers=args.val_num_workers,
+        test_num_workers=args.test_num_workers,
+    )
+    train_loader = _subset_loader(train_loader, args.max_train_samples, num_workers=args.train_num_workers)
+    val_loader = _subset_loader(val_loader, args.max_val_samples, num_workers=args.val_num_workers)
+    test_loader = _subset_loader(test_loader, args.max_test_samples, num_workers=args.test_num_workers)
+    return train_loader, val_loader, test_loader
 
 
 def _select_best_by_objective(records: Sequence[TrialRecord]) -> Optional[TrialRecord]:
@@ -416,9 +451,31 @@ def main() -> None:
     all_records: List[TrialRecord] = []
     best_across_models: List[Dict[str, Any]] = []
     best_per_loss_by_model: Dict[str, List[Dict[str, Any]]] = {}
+    cached_loaders_by_model: Dict[str, Tuple[DataLoader, DataLoader, DataLoader]] = {}
+
+    total_trials = len(args.models) * len(args.loss_families) * int(args.trials_per_loss)
+    completed_trials = 0
+
+    print(
+        "[hpo] plan: "
+        f"models={args.models}, losses={args.loss_families}, "
+        f"trials_per_loss={args.trials_per_loss}, total_trials={total_trials}"
+    )
 
     for model in args.models:
         print(f"\n[hpo] === Model: {model} ===")
+        print(f"[hpo] building and caching loaders once for model={model} ...")
+        cached_loaders_by_model[model] = _build_cached_loaders_for_model(
+            project_root=project_root,
+            base_config=config_by_model[model],
+            args=args,
+            model=model,
+        )
+        tr, va, te = cached_loaders_by_model[model]
+        print(
+            f"[hpo] cached loader sizes for {model}: "
+            f"train={len(tr.dataset)}, val={len(va.dataset)}, test={len(te.dataset)}"
+        )
         model_records: List[TrialRecord] = []
         for loss in args.loss_families:
             print(f"[hpo] -- Loss family: {loss}")
@@ -426,7 +483,17 @@ def main() -> None:
                 trial_seed = args.seed + (1000 * (args.models.index(model) + 1)) + (100 * (args.loss_families.index(loss) + 1)) + t_idx
                 hp = _sample_hparams(loss_type=loss, model=model, rng=rng)
                 trial_dir = out_root / model / loss / f"trial_{t_idx:03d}"
-                print(f"[hpo] trial={t_idx}/{args.trials_per_loss} seed={trial_seed} hp={hp}")
+                completed_trials += 1
+                print(
+                    f"[hpo] trial {completed_trials}/{total_trials} | "
+                    f"model={model} | loss={loss} | family_trial={t_idx}/{args.trials_per_loss}"
+                )
+                print(
+                    "[hpo] params: "
+                    f"seed={trial_seed}, monkeys={args.monkeys}, mask_ratio={args.mask_ratio}, "
+                    f"frame=[{args.frame_start},{args.frame_end}], batch_size={args.batch_size}, "
+                    f"clip_length={args.clip_length}, patch_size={args.patch_size}, hp={hp}"
+                )
                 rec = _run_single_trial(
                     project_root=project_root,
                     base_config=config_by_model[model],
@@ -436,10 +503,18 @@ def main() -> None:
                     model=model,
                     loss_type=loss,
                     hp=hp,
+                    prebuilt_loaders=cached_loaders_by_model[model],
                 )
                 rec.trial_idx = t_idx
                 model_records.append(rec)
                 all_records.append(rec)
+                print(
+                    "[hpo] trial done: "
+                    f"objective({rec.objective_name},{rec.objective_mode})={rec.objective_value:.6f}, "
+                    f"val_{args.common_metric}={rec.common_metric_value:.6f}, "
+                    f"test_{args.common_metric}={_extract_common_metric(rec.test_metrics, args.common_metric):.6f}, "
+                    f"trial_dir={trial_dir}"
+                )
                 if args.cleanup_checkpoints:
                     _cleanup_trial_checkpoints(trial_dir / "ckpt")
 
