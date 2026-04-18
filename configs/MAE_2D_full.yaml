@@ -43,6 +43,8 @@ lr: 1.0e-4
 weight_decay: 0.05
 epochs: 100
 max_grad_norm: 1.0
+# CUDA mixed precision (autocast) + l1_ssim often goes NaN; keep FP32 for stable MAE 2D training.
+use_amp: false
 ckpt_dir: ./checkpoints_mae2d
 log_dir: logs_mae2d
 seed: 17

@@ -54,20 +54,40 @@ class Trainer:
             print("Plotting disabled: matplotlib is not available.")
             self.plot_loss = False
         epochs = self.cfg.get("epochs", 10)
+        # FP16 autocast + SSIM/L1-SSIM losses often diverges to NaN on CUDA; allow disabling via cfg["use_amp"].
+        use_amp = bool(self.cfg.get("use_amp", True)) and self.device.type == "cuda"
+        if not use_amp and self.device.type == "cuda":
+            print("[Trainer] use_amp=False — training in full precision (recommended for l1_ssim / mse_ssim).")
+
         for epoch in range(epochs):
             self.model.train()
             train_losses_epoch = []
             pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")
             for batch in pbar:
                 self.opt.zero_grad()
-                with autocast():
+                if use_amp:
+                    with autocast():
+                        if self.debug_train:
+                            loss = self._forward_and_loss_debug(batch)
+                        else:
+                            loss = self._forward_and_loss(batch)
+                else:
                     if self.debug_train:
                         loss = self._forward_and_loss_debug(batch)
                     else:
                         loss = self._forward_and_loss(batch)
-                self.scaler.scale(loss).backward()
-                self.scaler.step(self.opt)
-                self.scaler.update()
+
+                if not torch.isfinite(loss).all():
+                    print("[Trainer] Warning: non-finite loss; skipping batch.")
+                    continue
+
+                if use_amp:
+                    self.scaler.scale(loss).backward()
+                    self.scaler.step(self.opt)
+                    self.scaler.update()
+                else:
+                    loss.backward()
+                    self.opt.step()
 
                 loss_val = float(loss.item())
                 train_losses_epoch.append(loss_val)
