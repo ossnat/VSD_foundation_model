@@ -25,6 +25,7 @@ import torch
 from torch.utils.data import DataLoader, Subset
 
 from src.experiments.mae_2d_lstm.build_dataloaders import build_dataloaders
+from src.experiments.mae_2d_lstm.checkpoint_utils import resolve_checkpoint_file
 from src.experiments.mae_2d_lstm.load_config import load_and_prepare_config
 from src.experiments.mae_2d_lstm.vis_test_reconstruction import save_test_reconstruction_figure
 from src.models import build_ssl_model
@@ -104,36 +105,6 @@ def _build_overrides(args: argparse.Namespace) -> Dict[str, Any]:
     if args.plot_retinotopic is not None:
         o["plot_retinotopic"] = args.plot_retinotopic
     return o
-
-
-def _find_checkpoint_file(ckpt_dir: Path, explicit: Optional[str]) -> Path:
-    if explicit is not None:
-        p = Path(explicit)
-        if not p.exists():
-            raise FileNotFoundError(f"checkpoint-path not found: {p}")
-        return p
-
-    model_final = ckpt_dir / "model_final.pt"
-    if model_final.exists():
-        return model_final
-
-    epoch_files = list(ckpt_dir.glob("epoch_*.pt"))
-    if epoch_files:
-        def _epoch_num(path: Path) -> int:
-            stem = path.stem  # epoch_10
-            try:
-                return int(stem.split("_")[-1])
-            except Exception:
-                return -1
-        return sorted(epoch_files, key=_epoch_num)[-1]
-
-    encoder_final = ckpt_dir / "encoder_final.pt"
-    if encoder_final.exists():
-        return encoder_final
-
-    raise FileNotFoundError(
-        f"No checkpoint file found in {ckpt_dir}. Expected model_final.pt, epoch_*.pt, or encoder_final.pt."
-    )
 
 
 def _select_test_indices(
@@ -281,7 +252,7 @@ def main() -> None:
     )
 
     model = build_ssl_model(cfg).to(device)
-    ckpt_file = _find_checkpoint_file(ckpt_dir, args.checkpoint_path)
+    ckpt_file = resolve_checkpoint_file(ckpt_dir, args.checkpoint_path)
     state = torch.load(ckpt_file, map_location=device)
 
     loaded_mode = "full_model_state_dict"

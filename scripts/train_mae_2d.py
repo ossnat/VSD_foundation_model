@@ -73,6 +73,8 @@ def _merge_cli_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         o["preload_into_ram"] = args.preload_into_ram
     if args.pin_memory is not None:
         o["pin_memory"] = args.pin_memory
+    if getattr(args, "use_amp", None) is not None:
+        o["use_amp"] = bool(args.use_amp)
 
     crop_frame_arg = getattr(args, "crop_frame", None)
     cf = _optional_str(crop_frame_arg)
@@ -122,6 +124,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=None,
         help="DataLoader pin_memory (default: from YAML).",
+    )
+    p.add_argument(
+        "--use-amp",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="CUDA autocast+GradScaler (default: from YAML; MAE_2D_full sets use_amp=false for l1_ssim stability).",
     )
 
     # Model
