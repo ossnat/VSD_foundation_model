@@ -82,6 +82,10 @@ def build_ssl_model(cfg):
                 "normalize": cfg.get("normalize_loss", True),
                 "crop_loss": cfg.get("crop_loss", None),
                 "crop_loss_radius": cfg.get("crop_loss_radius", 30),
+                "loss_type": cfg.get("loss_type", "mse"),
+                "alpha": cfg.get("alpha", 0.84),
+                "ssim_window_size": cfg.get("ssim_window_size", 11),
+                "ssim_sigma": cfg.get("ssim_sigma", 1.5),
             },
             "training": {
                 "lr": cfg.get("lr", 1e-4),
@@ -114,7 +118,13 @@ def build_ssl_model(cfg):
             hidden_dim=cfg.get("hidden_dim", 256),
         )
         mae_config = {
-            "loss": {"normalize": cfg.get("normalize_loss", True)},
+            "loss": {
+                "normalize": cfg.get("normalize_loss", True),
+                "loss_type": cfg.get("loss_type", "mse"),
+                "alpha": cfg.get("alpha", 0.84),
+                "ssim_window_size": cfg.get("ssim_window_size", 11),
+                "ssim_sigma": cfg.get("ssim_sigma", 1.5),
+            },
         }
         return MAESystem(encoder=encoder, decoder=decoder, config=mae_config)
 
@@ -139,6 +149,10 @@ def build_ssl_model(cfg):
                 "normalize": cfg.get("normalize_loss", True),
                 "crop_loss": cfg.get("crop_loss", None),
                 "crop_loss_radius": cfg.get("crop_loss_radius", 30),
+                "loss_type": cfg.get("loss_type", "mse"),
+                "alpha": cfg.get("alpha", 0.84),
+                "ssim_window_size": cfg.get("ssim_window_size", 11),
+                "ssim_sigma": cfg.get("ssim_sigma", 1.5),
             },
             "training": {
                 "lr": cfg.get("lr", 1e-4),
