@@ -12,6 +12,7 @@ from .heads.mae_decoder_2d_lstm import Video2DLSTMDecoder
 from .backbone.mae_backbone_3d import MAER3D18Backbone
 from .heads.mae_decoder_3d import MAEDecoder3D
 from .systems.mae_system import MAESystem
+from .systems.linear_mae_system import LinearMAESystem
 
 # ---------------------------------------------------------------------------
 # Backbone registry — maps config name -> class.
@@ -23,6 +24,51 @@ BACKBONE_REGISTRY = {
     "MAEShallowCNNBackbone": MAEShallowCNNBackbone,
     "MAER3D18Backbone": MAER3D18Backbone,
 }
+
+
+def _infer_linear_mae_spatial_hw(cfg) -> tuple:
+    """
+    Spatial (H, W) after patch alignment (same trimming as VsdMaskedDataset.apply_mask).
+
+    Resolution order:
+      1) cfg['linear_spatial_hw'] = [H, W] if set (should be patch-aligned for your data)
+      2) stats_json mean_shape[2:4] if the file exists
+      3) default (100, 100)
+
+    Then trim to multiples of patch_size (H, W) from cfg (default [1, 8, 8]).
+    """
+    import json
+    from pathlib import Path
+
+    hw = cfg.get("linear_spatial_hw")
+    if hw is not None and isinstance(hw, (list, tuple)) and len(hw) >= 2:
+        h0, w0 = int(hw[0]), int(hw[1])
+    else:
+        h0, w0 = 100, 100
+        stats_path = cfg.get("stats_json_path")
+        if stats_path:
+            p = Path(stats_path)
+            if p.is_file():
+                try:
+                    with open(p, "r") as f:
+                        sd = json.load(f)
+                    ms = sd.get("mean_shape")
+                    if isinstance(ms, (list, tuple)) and len(ms) >= 4:
+                        h0, w0 = int(ms[2]), int(ms[3])
+                except Exception:
+                    pass
+
+    patch = cfg.get("patch_size", [1, 8, 8])
+    p_h = int(patch[1]) if len(patch) > 1 else 8
+    p_w = int(patch[2]) if len(patch) > 2 else 8
+    h_trim = (h0 // p_h) * p_h
+    w_trim = (w0 // p_w) * p_w
+    if h_trim <= 0 or w_trim <= 0:
+        raise ValueError(
+            f"Invalid trimmed spatial size ({h_trim}, {w_trim}) from base ({h0}, {w0}) "
+            f"and patch ({p_h}, {p_w})."
+        )
+    return h_trim, w_trim
 
 
 def build_ssl_model(cfg):
@@ -162,6 +208,36 @@ def build_ssl_model(cfg):
         return MAESystem(encoder=encoder, decoder=decoder, config=mae_config)
 
     # ------------------------------------------------------------------
+    # Linear MAE 2D baseline (global linear map; ridge via weight_decay, optional L1 on W)
+    # ------------------------------------------------------------------
+    elif model_type == "linear_mae_2d":
+        h, w = _infer_linear_mae_spatial_hw(cfg)
+        print(f"[build_ssl_model] linear_mae_2d spatial (patch-trimmed): {h} x {w}")
+
+        mae_config = {
+            "loss": {
+                "normalize": cfg.get("normalize_loss", True),
+                "crop_loss": cfg.get("crop_loss", None),
+                "crop_loss_radius": cfg.get("crop_loss_radius", 30),
+                "loss_type": cfg.get("loss_type", "mse"),
+                "alpha": cfg.get("alpha", 0.84),
+                "ssim_window_size": cfg.get("ssim_window_size", 11),
+                "ssim_sigma": cfg.get("ssim_sigma", 1.5),
+                "linear_l1_penalty": float(cfg.get("linear_l1_penalty", 0.0)),
+            },
+            "training": {
+                "lr": cfg.get("lr", 1e-3),
+                "weight_decay": cfg.get("weight_decay", 1e-2),
+            },
+        }
+        return LinearMAESystem(
+            num_channels=in_channels,
+            height=h,
+            width=w,
+            config=mae_config,
+        )
+
+    # ------------------------------------------------------------------
     # Legacy 3D CNN model
     # ------------------------------------------------------------------
     elif model_type == "cnn3d":
@@ -196,5 +272,6 @@ def build_ssl_model(cfg):
 
     else:
         raise ValueError(
-            f"Unknown model type: {model_type}. Supported: 'mae_2d', 'mae_2d_lstm', 'mae_3d', 'cnn3d'"
+            f"Unknown model type: {model_type}. Supported: "
+            f"'mae_2d', 'mae_2d_lstm', 'mae_3d', 'linear_mae_2d', 'cnn3d'"
         )
