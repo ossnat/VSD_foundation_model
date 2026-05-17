@@ -6,6 +6,8 @@ import json
 import os
 import math
 from collections import defaultdict
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 from torch.optim import AdamW
@@ -34,18 +36,100 @@ class Trainer:
         self.scaler = GradScaler()
         os.makedirs(cfg.get("ckpt_dir", "checkpoints"), exist_ok=True)
 
-    def fit(self, train_loader, val_loader):
+    def _training_state_json_path(self) -> str:
+        return os.path.join(self.cfg.get("ckpt_dir", "checkpoints"), "training_state.json")
+
+    def _training_state_pt_path(self) -> str:
+        return os.path.join(self.cfg.get("ckpt_dir", "checkpoints"), "training_state.pt")
+
+    def _save_training_state(
+        self,
+        epoch: int,
+        train_loss_epoch_history: List[float],
+        val_loss_epoch_history: List[Optional[float]],
+        global_step: int,
+    ) -> None:
+        """Persist epoch index, loss history, and optimizer for optional resume."""
+        meta = {
+            "epoch": epoch,
+            "global_step": global_step,
+            "train_loss_epoch": train_loss_epoch_history,
+            "val_loss_epoch": val_loss_epoch_history,
+        }
+        json_path = self._training_state_json_path()
+        with open(json_path, "w") as f:
+            json.dump(meta, f, indent=2)
+        torch.save({"optimizer": self.opt.state_dict(), **meta}, self._training_state_pt_path())
+
+    def _try_resume(
+        self,
+    ) -> Tuple[int, int, List[float], List[Optional[float]]]:
+        """
+        Load latest model checkpoint + training_state.json when cfg['resume'] is true.
+        Returns (start_epoch, global_step, train_loss_history, val_loss_history).
+        """
+        if not self.cfg.get("resume", False):
+            return 0, 0, [], []
+
+        from src.experiments.mae_2d_lstm.checkpoint_utils import resolve_checkpoint_file
+
+        ckpt_dir = Path(self.cfg.get("ckpt_dir", "checkpoints"))
+        explicit = self.cfg.get("resume_checkpoint_path")
+        ckpt_path = resolve_checkpoint_file(ckpt_dir, explicit_path=explicit)
+        state = torch.load(ckpt_path, map_location=self.device)
+        if isinstance(state, dict) and "model" in state:
+            self.model.load_state_dict(state["model"], strict=True)
+        else:
+            self.model.load_state_dict(state, strict=True)
+        print(f"[Trainer] Resumed model weights from {ckpt_path}")
+
+        start_epoch = 0
         global_step = 0
+        train_hist: List[float] = []
+        val_hist: List[Optional[float]] = []
+        pt_path = self._training_state_pt_path()
+        json_path = self._training_state_json_path()
+        ts: Dict[str, Any] = {}
+        if os.path.isfile(pt_path):
+            ts = torch.load(pt_path, map_location=self.device)
+        elif os.path.isfile(json_path):
+            with open(json_path, "r") as f:
+                ts = json.load(f)
+        if ts:
+            start_epoch = int(ts.get("epoch", 0))
+            global_step = int(ts.get("global_step", 0))
+            train_hist = list(ts.get("train_loss_epoch", []))
+            val_hist = list(ts.get("val_loss_epoch", []))
+            if "optimizer" in ts:
+                self.opt.load_state_dict(ts["optimizer"])
+            print(
+                f"[Trainer] Resumed training state: epoch={start_epoch}, "
+                f"global_step={global_step}, history_len={len(train_hist)}"
+            )
+        else:
+            # Infer epoch from checkpoint filename (epoch_N.pt) when state file is missing.
+            stem = ckpt_path.stem
+            if stem.startswith("epoch_"):
+                try:
+                    start_epoch = int(stem.split("_")[-1])
+                except ValueError:
+                    start_epoch = 0
+            print(
+                f"[Trainer] No training_state.json; starting at epoch {start_epoch} "
+                f"(optimizer re-initialized)."
+            )
+        return start_epoch, global_step, train_hist, val_hist
+
+    def fit(self, train_loader, val_loader):
+        start_epoch, global_step, train_loss_epoch_history, val_loss_epoch_history = (
+            self._try_resume()
+        )
         loss_buffer = []
         plot_steps = []
         plot_losses = []
         fig = None
         ax = None
         line = None
-        # Epoch-level loss history (used for saved plots/analysis)
-        train_loss_epoch_history = []
-        val_loss_epoch_history = []
-
         if self.plot_loss and plt is None:
             print("Plotting disabled: matplotlib is not available.")
             self.plot_loss = False
@@ -55,7 +139,17 @@ class Trainer:
         if not use_amp and self.device.type == "cuda":
             print("[Trainer] use_amp=False — training in full precision (recommended for l1_ssim / mse_ssim).")
 
-        for epoch in range(epochs):
+        if start_epoch >= epochs:
+            print(
+                f"[Trainer] resume: start_epoch={start_epoch} >= epochs={epochs}; "
+                "skipping training loop."
+            )
+            return {
+                "train_loss_epoch": train_loss_epoch_history,
+                "val_loss_epoch": val_loss_epoch_history,
+            }
+
+        for epoch in range(start_epoch, epochs):
             self.model.train()
             train_losses_epoch = []
             pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")
@@ -120,9 +214,15 @@ class Trainer:
             else:
                 val_loss_epoch_history.append(None)
 
-            # Save checkpoint each epoch
-            ckpt_path = os.path.join(self.cfg.get("ckpt_dir","checkpoints"), f"epoch_{epoch+1}.pt")
+            # Save checkpoint each epoch (state_dict only — eval scripts expect this format)
+            ckpt_path = os.path.join(self.cfg.get("ckpt_dir", "checkpoints"), f"epoch_{epoch+1}.pt")
             torch.save(self.model.state_dict(), ckpt_path)
+            self._save_training_state(
+                epoch + 1,
+                train_loss_epoch_history,
+                val_loss_epoch_history,
+                global_step,
+            )
 
         return {
             "train_loss_epoch": train_loss_epoch_history,
@@ -204,6 +304,7 @@ class Trainer:
         all_r2 = []
         all_ss_tot = []
         all_ssim = []
+        all_pearson = []
 
         with torch.no_grad():
             for batch in tqdm(loader, desc=f"Eval over time ({split_name})"):
@@ -233,11 +334,17 @@ class Trainer:
                     # Keep array lengths aligned for aggregation.
                     ss_tot_list = [None] * len(mse_list)
                 ssim_list = out["ssim_per_sample"].cpu().tolist()
+                pearson_list = out.get("pearson_per_sample")
+                if pearson_list is not None:
+                    pearson_list = pearson_list.cpu().tolist()
+                else:
+                    pearson_list = [None] * len(mse_list)
                 all_start_frames.extend(start_frames)
                 all_mse.extend(mse_list)
                 all_r2.extend(r2_list)
                 all_ssim.extend(ssim_list)
                 all_ss_tot.extend(ss_tot_list)
+                all_pearson.extend(pearson_list)
 
         if not all_start_frames:
             print(f"evaluate_metrics_over_time: no samples collected for {split_name}.")
@@ -248,12 +355,17 @@ class Trainer:
         by_start_r2 = defaultdict(list)
         by_start_ssim = defaultdict(list)
         by_start_ss_tot = defaultdict(list)
-        for s, m, r2, sm, ss_tot in zip(all_start_frames, all_mse, all_r2, all_ssim, all_ss_tot):
+        by_start_pearson = defaultdict(list)
+        for s, m, r2, sm, ss_tot, pr in zip(
+            all_start_frames, all_mse, all_r2, all_ssim, all_ss_tot, all_pearson
+        ):
             by_start_mse[s].append(m)
             by_start_r2[s].append(r2)
             by_start_ssim[s].append(sm)
             if ss_tot is not None:
                 by_start_ss_tot[s].append(ss_tot)
+            if pr is not None:
+                by_start_pearson[s].append(pr)
 
         result = {}
         for start_frame in sorted(by_start_mse.keys()):
@@ -280,6 +392,15 @@ class Trainer:
             else:
                 mean_ss_tot = None
                 std_ss_tot = None
+            pearson_vals = by_start_pearson.get(start_frame, [])
+            if pearson_vals:
+                mean_pearson = sum(pearson_vals) / len(pearson_vals)
+                std_pearson = math.sqrt(
+                    sum((x - mean_pearson) ** 2 for x in pearson_vals) / len(pearson_vals)
+                ) if len(pearson_vals) > 1 else 0.0
+            else:
+                mean_pearson = None
+                std_pearson = None
             result[start_frame] = {
                 "mean_mse": mean_mse,
                 "std_mse": std_mse,
@@ -290,6 +411,8 @@ class Trainer:
                 "std_ssim_masked": std_ssim,
                 "mean_ss_tot_masked": mean_ss_tot,
                 "std_ss_tot_masked": std_ss_tot,
+                "mean_pearson_flat": mean_pearson,
+                "std_pearson_flat": std_pearson,
                 "count": len(vals),
             }
 
@@ -317,8 +440,27 @@ class Trainer:
         plot_path = os.path.join(out_dir, f"{base_name}.png")
         # JSON: list of records for easy reading
         records = [{"start_frame": sf, **r} for sf, r in sorted(result.items())]
+        x_sorted = sorted(result.keys())
+        pearson_mean_vec = [
+            result[sf]["mean_pearson_flat"] for sf in x_sorted
+            if result[sf].get("mean_pearson_flat") is not None
+        ]
+        pearson_std_vec = [
+            result[sf]["std_pearson_flat"] for sf in x_sorted
+            if result[sf].get("std_pearson_flat") is not None
+        ]
         with open(json_path, "w") as f:
-            json.dump({"split": split_name, "metrics": records}, f, indent=2)
+            json.dump(
+                {
+                    "split": split_name,
+                    "start_frames": x_sorted,
+                    "mean_pearson_flat": pearson_mean_vec,
+                    "std_pearson_flat": pearson_std_vec,
+                    "metrics": records,
+                },
+                f,
+                indent=2,
+            )
         print(f"Saved temporal metrics to {json_path}")
 
         if plt is not None:
@@ -330,8 +472,16 @@ class Trainer:
             std_r2 = [result[sf]["std_r2_masked"] for sf in x]
             mean_ssim = [result[sf]["mean_ssim_masked"] for sf in x]
             std_ssim = [result[sf]["std_ssim_masked"] for sf in x]
+            mean_pearson = [
+                result[sf]["mean_pearson_flat"] if result[sf]["mean_pearson_flat"] is not None else float("nan")
+                for sf in x
+            ]
+            std_pearson = [
+                result[sf]["std_pearson_flat"] if result[sf]["std_pearson_flat"] is not None else 0.0
+                for sf in x
+            ]
 
-            fig, axes = plt.subplots(4, 1, figsize=(8, 14), sharex=True)
+            fig, axes = plt.subplots(5, 1, figsize=(8, 17), sharex=True)
             axes[0].errorbar(x, mean_mse, yerr=std_mse, capsize=3, marker="o", linestyle="-")
             axes[0].set_ylabel("MSE (masked)")
             axes[0].set_title(f"Masked MSE over time ({split_name})")
@@ -345,10 +495,14 @@ class Trainer:
             axes[2].set_title(f"Masked R² over time ({split_name})")
             axes[2].grid(True, alpha=0.3)
             axes[3].errorbar(x, mean_ssim, yerr=std_ssim, capsize=3, marker="o", linestyle="-")
-            axes[3].set_xlabel("Clip start frame")
             axes[3].set_ylabel("SSIM (masked)")
             axes[3].set_title(f"Masked SSIM over time ({split_name})")
             axes[3].grid(True, alpha=0.3)
+            axes[4].errorbar(x, mean_pearson, yerr=std_pearson, capsize=3, marker="o", linestyle="-")
+            axes[4].set_xlabel("Clip start frame (time)")
+            axes[4].set_ylabel("Pearson r (flattened frame)")
+            axes[4].set_title(f"Flattened-frame Pearson r over time ({split_name})")
+            axes[4].grid(True, alpha=0.3)
             fig.tight_layout()
             fig.savefig(plot_path, dpi=150, bbox_inches="tight")
             plt.close(fig)

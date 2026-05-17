@@ -7,6 +7,7 @@ import torch
 from src.training.trainer import Trainer
 from src.utils.logger import TBLogger, set_seed
 from src.experiments.mae_2d_lstm.vis_test_reconstruction import save_test_reconstruction_figure
+from src.experiments.mae_2d_lstm.temporal_eval_plots import save_temporal_per_metric_figures
 
 
 def run_training_and_temporal_eval(
@@ -89,10 +90,21 @@ def run_training_and_temporal_eval(
         except Exception as e:
             print(f"Warning: failed to save loss plot ({e}).")
 
-    # Save final encoder checkpoint
+    # Save final encoder checkpoint (MAE CNN); linear baseline has no encoder
     enc_path = os.path.join(ckpt_dir, "encoder_final.pt")
-    torch.save(model.encoder.state_dict(), enc_path)
-    print(f"Saved encoder to {enc_path}")
+    if hasattr(model, "encoder") and len(list(model.encoder.parameters())) > 0:
+        torch.save(model.encoder.state_dict(), enc_path)
+        print(f"Saved encoder to {enc_path}")
+    else:
+        print("Skipping encoder_final.pt (no encoder parameters on this model).")
+
+    if hasattr(model, "proj"):
+        lin_path = os.path.join(ckpt_dir, "linear_proj_final.pt")
+        try:
+            torch.save(model.proj.state_dict(), lin_path)
+            print(f"Saved linear projection to {lin_path}")
+        except Exception as e:
+            print(f"Warning: failed to save linear_proj_final.pt ({e}).")
 
     # Optional: save full model state dict for convenience
     model_final_path = os.path.join(ckpt_dir, "model_final.pt")
@@ -121,7 +133,7 @@ def run_training_and_temporal_eval(
     eval_metrics = test_metrics
 
     # Temporal evaluation: MSE/RMSE/R²/SSIM over time, plus plot + JSON paths are printed by Trainer
-    _ = trainer.evaluate_metrics_over_time(val_loader, split_name="val")
+    temporal_val = trainer.evaluate_metrics_over_time(val_loader, split_name="val")
     temporal_metrics = trainer.evaluate_metrics_over_time(test_loader, split_name="test")
 
     # Reconstruction visualization:
@@ -131,6 +143,12 @@ def run_training_and_temporal_eval(
         cfg.get("results_dir") or cfg.get("ckpt_dir", "checkpoints"),
         "temporal_eval",
     )
+
+    if cfg.get("temporal_eval_per_metric_plots", False):
+        if temporal_val:
+            save_temporal_per_metric_figures(temporal_val, vis_dir, split_name="val")
+        if temporal_metrics:
+            save_temporal_per_metric_figures(temporal_metrics, vis_dir, split_name="test")
 
     for split, loader in (("val", val_loader), ("test", test_loader)):
         # original | reconstructed | |diff|
