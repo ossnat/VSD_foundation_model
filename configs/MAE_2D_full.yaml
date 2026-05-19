@@ -10,11 +10,11 @@ model: mae_2d
 backbone: resnet18
 pretrained: false
 channels: 1
-hidden_dim: 256
+hidden_dim: 384 # 256
 normalize_loss: true
 crop_loss: null
 crop_loss_radius: 30
-loss_type: "l1_ssim"        # "mse" | "l1" | "l1_ssim" | "mse_ssim"
+loss_type: "l1"        # "mse" | "l1" | "l1_ssim" | "mse_ssim"
 alpha: 0.84                # only used for *_ssim variants
 ssim_window_size: 11
 ssim_sigma: 1.5
@@ -39,8 +39,8 @@ persistent_workers: true
 prefetch_factor: 2
 
 # --- Training ---
-lr: 1.0e-4
-weight_decay: 0.05
+lr: 5.84e-5 # 1.0e-4
+weight_decay: 0.03 # 0.05
 epochs: 100
 max_grad_norm: 1.0
 # CUDA mixed precision (autocast) + l1_ssim often goes NaN; keep FP32 for stable MAE 2D training.

@@ -1,10 +1,28 @@
-pytorch-lightning==2.4.0
+# VSD foundation model — runtime dependencies (Python >= 3.9)
+# GPU: install PyTorch with CUDA first if needed, e.g.:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+# Then: pip install -r requirements.txt && pip install -e .
+
+# --- Core ML ---
 torch>=2.2.0
 torchvision>=0.17.0
 tensorboard>=2.14
+
+# --- Data I/O & training loop ---
 numpy
-opencv-python
+h5py>=3.8
+pandas>=1.5
+tqdm>=4.64
+
+# --- Plotting & model utils ---
 matplotlib
 einops
+
+# --- Config ---
 pyyaml
-pytest
+
+# --- Preprocessing (MAT → HDF5, offline pipelines) ---
+scipy>=1.9
+
+# --- Tests (pytest tests/) ---
+pytest>=7.0

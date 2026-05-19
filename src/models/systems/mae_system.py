@@ -3,7 +3,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .base_system import BaseSystem
-from src.training.mae_masked_metrics import aggregate_batch_metrics, masked_ssim_per_sample
+from src.training.mae_masked_metrics import (
+    aggregate_batch_metrics,
+    flatten_pearson_r_per_sample,
+    masked_ssim_per_sample,
+)
 
 
 class MAELoss(nn.Module):
@@ -226,6 +230,7 @@ class MAESystem(BaseSystem):
         r2_per_sample = None
         ss_tot_per_sample = None
         ssim_per_sample = None
+        pearson_per_sample = None
         with torch.no_grad():
             eps = 1e-8
             # Z-score reconstruction and target per batch so we compare two normalized populations
@@ -265,6 +270,7 @@ class MAESystem(BaseSystem):
                 r2_per_sample = agg["r2_masked_per_sample"]
                 ss_tot_per_sample = agg.get("ss_tot_masked_per_sample", None)
                 ssim_per_sample = agg["ssim_masked_per_sample"]
+                pearson_per_sample = flatten_pearson_r_per_sample(reconstruction, video_target)
 
         metrics = {
             "mse_overall": mse_overall.item(),
@@ -285,6 +291,8 @@ class MAESystem(BaseSystem):
             out["ss_tot_per_sample"] = ss_tot_per_sample
         if ssim_per_sample is not None:
             out["ssim_per_sample"] = ssim_per_sample
+        if pearson_per_sample is not None:
+            out["pearson_per_sample"] = pearson_per_sample
         return out
     
     def get_optimizer(self, lr=None, weight_decay=None):

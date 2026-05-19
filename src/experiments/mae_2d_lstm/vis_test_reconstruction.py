@@ -17,6 +17,10 @@ except Exception:
 
 def _forward_reconstruction(model: torch.nn.Module, batch: Dict[str, Any], device: torch.device):
     """Run MAE forward path; returns reconstruction, mask, target, masked input (on device)."""
+    recon_fn = getattr(model, "reconstruct_for_vis", None)
+    if callable(recon_fn):
+        return recon_fn(batch, device)
+
     video_masked = batch["video_masked"].to(device)
     video_target = batch["video_target"].to(device)
     mask = batch["mask"].to(device)

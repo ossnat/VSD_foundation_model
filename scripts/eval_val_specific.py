@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -43,37 +42,12 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from src.experiments.mae_2d_lstm.build_dataloaders import build_dataloaders
+from src.experiments.mae_2d_lstm.checkpoint_utils import resolve_checkpoint_file
 from src.experiments.mae_2d_lstm.load_config import load_and_prepare_config
 from src.experiments.mae_2d_lstm.vis_test_reconstruction import save_test_reconstruction_figure
 from src.models import build_ssl_model
 from src.training.trainer import Trainer
 from src.utils.logger import TBLogger, set_seed
-
-
-def _find_checkpoint_file(ckpt_dir: Path, explicit: Optional[str]) -> Path:
-    if explicit:
-        p = Path(explicit)
-        if not p.exists():
-            raise FileNotFoundError(f"--checkpoint-path not found: {p}")
-        return p
-    model_final = ckpt_dir / "model_final.pt"
-    if model_final.exists():
-        return model_final
-    epoch_files = list(ckpt_dir.glob("epoch_*.pt"))
-    if epoch_files:
-        def _epoch_num(path: Path) -> int:
-            try:
-                return int(path.stem.split("_")[-1])
-            except Exception:
-                return -1
-
-        return sorted(epoch_files, key=_epoch_num)[-1]
-    enc = ckpt_dir / "encoder_final.pt"
-    if enc.exists():
-        return enc
-    raise FileNotFoundError(
-        f"No checkpoint in {ckpt_dir}. Expected model_final.pt, epoch_*.pt, or encoder_final.pt."
-    )
 
 
 def _build_overrides(args: argparse.Namespace) -> Dict[str, Any]:
@@ -173,7 +147,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     )
 
     model = build_ssl_model(cfg).to(device)
-    ckpt_file = _find_checkpoint_file(ckpt_dir, args.checkpoint_path)
+    ckpt_file = resolve_checkpoint_file(ckpt_dir, args.checkpoint_path)
     state = torch.load(ckpt_file, map_location=device)
     try:
         model.load_state_dict(state, strict=True)

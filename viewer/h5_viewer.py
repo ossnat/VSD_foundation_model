@@ -3,6 +3,11 @@ Interactive HDF5 viewer: visualize frames from a chosen dataset between start/en
 
 Typical VSD layout: dataset shape (n_pixels, n_frames) with n_pixels = H*H.
 Also supports (H, W, T) and (T, H, W).
+
+Usage:
+cd /path/to/VSD_foundation_model
+source .venv/bin/activate   # if you use this venv
+PYTHONPATH=. python scripts/h5_viewer.py
 """
 
 from __future__ import annotations

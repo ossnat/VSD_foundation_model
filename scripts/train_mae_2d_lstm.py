@@ -105,7 +105,7 @@ def main() -> None:
         "--frame-end",
         type=int,
         default=None,
-        help="Override frame_end in config (exclusive end index, same semantics as YAML).",
+        help="Override frame_end in config (inclusive end index).",
     )
     parser.add_argument(
         "--train-num-workers",

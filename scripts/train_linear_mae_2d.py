@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """
-Train **MAE 2D** (ResNet18 + MAEDecoder2D only — no LSTM / no temporal encoder).
+Train **Linear MAE 2D** baseline: single Linear(map) from [masked frame | mask] to reconstruction.
 
-Mirrors `train_mae_2d_lstm.py`: same dataloaders, Trainer, test metrics, temporal plots,
-and reconstruction PNG. Default config: `configs/MAE_2D_full.yaml` (clip_length: 1).
+Same dataloaders, Trainer, metrics, temporal JSON/plots, and reconstruction PNGs as MAE 2D.
+Default config: `configs/linear_mae_2d_full.yaml`.
 
-Load order: YAML base config → apply CLI overrides (only set keys you pass).
+For **lasso / elastic-net** behaviour, set `linear_l1_penalty` in YAML (L1 on weights) and tune
+`weight_decay` (L2 / ridge via AdamW).
+
+Load order: YAML base config → CLI overrides.
 """
 
 from __future__ import annotations
@@ -29,14 +32,13 @@ def _optional_str(s: Optional[str]) -> Optional[str]:
 
 
 def _merge_cli_overrides(args: argparse.Namespace) -> Dict[str, Any]:
-    """Build flat config overrides from CLI args (only non-None values)."""
     o: Dict[str, Any] = {}
 
     def set_if(key: str, value: Any) -> None:
         if value is not None:
             o[key] = value
 
-    set_if("model", "mae_2d")
+    set_if("model", "linear_mae_2d")
     set_if("monkeys", args.monkeys)
     set_if("mask_ratio", args.mask_ratio)
     set_if("clip_length", args.clip_length)
@@ -48,6 +50,7 @@ def _merge_cli_overrides(args: argparse.Namespace) -> Dict[str, Any]:
     set_if("val_frame_stride", args.val_frame_stride)
     set_if("lr", args.lr)
     set_if("weight_decay", args.weight_decay)
+    set_if("linear_l1_penalty", args.linear_l1_penalty)
     set_if("seed", args.seed)
     set_if("max_grad_norm", args.max_grad_norm)
     set_if("ckpt_dir", args.ckpt_dir)
@@ -57,16 +60,16 @@ def _merge_cli_overrides(args: argparse.Namespace) -> Dict[str, Any]:
     set_if("split_csv_path", args.split_csv_path)
     set_if("stats_json_path", args.stats_json_path)
     set_if("processed_root", args.processed_root)
-    set_if("backbone", args.backbone)
     set_if("channels", args.channels)
-    set_if("hidden_dim", args.hidden_dim)
     set_if("crop_loss_radius", getattr(args, "crop_loss_radius", None))
+    set_if("loss_type", args.loss_type)
+
+    if getattr(args, "linear_spatial_hw", None) is not None and len(args.linear_spatial_hw) == 2:
+        o["linear_spatial_hw"] = [int(args.linear_spatial_hw[0]), int(args.linear_spatial_hw[1])]
 
     if getattr(args, "crop_loss", None) is not None:
         o["crop_loss"] = _optional_str(args.crop_loss)
 
-    if args.pretrained is not None:
-        o["pretrained"] = args.pretrained
     if args.normalize_loss is not None:
         o["normalize_loss"] = args.normalize_loss
     if args.preload_into_ram is not None:
@@ -75,6 +78,12 @@ def _merge_cli_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         o["pin_memory"] = args.pin_memory
     if getattr(args, "use_amp", None) is not None:
         o["use_amp"] = bool(args.use_amp)
+
+    if getattr(args, "temporal_eval_per_metric_plots", None) is not None:
+        o["temporal_eval_per_metric_plots"] = bool(args.temporal_eval_per_metric_plots)
+    if getattr(args, "resume", None) is not None:
+        o["resume"] = bool(args.resume)
+    set_if("resume_checkpoint_path", getattr(args, "resume_checkpoint_path", None))
 
     crop_frame_arg = getattr(args, "crop_frame", None)
     cf = _optional_str(crop_frame_arg)
@@ -90,87 +99,105 @@ def _merge_cli_overrides(args: argparse.Namespace) -> Dict[str, Any]:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Train MAE 2D (ResNet18 + MAEDecoder2D). Overrides config when flags are set.",
+        description="Train Linear MAE 2D baseline (ridge / optional L1 on weights).",
     )
     p.add_argument(
         "--config",
         type=str,
-        default="configs/MAE_2D_full.yaml",
+        default="configs/linear_mae_2d_full.yaml",
         help="Base YAML path (relative to project root or absolute).",
     )
 
-    # Data
-    p.add_argument("--dataset-name", type=str, default=None, help="e.g. vsd_mae")
+    p.add_argument("--dataset-name", type=str, default=None)
     p.add_argument("--split-csv-path", type=str, default=None)
     p.add_argument("--stats-json-path", type=str, default=None)
     p.add_argument("--processed-root", type=str, default=None)
     p.add_argument("--monkeys", type=str, nargs="*", default=None)
     p.add_argument("--mask-ratio", type=float, default=None)
-    p.add_argument("--clip-length", type=int, default=None, help="Use 1 for single-frame 2D MAE.")
+    p.add_argument("--clip-length", type=int, default=None, help="Use 1 for 2D linear MAE.")
     p.add_argument("--frame-start", type=int, default=None)
-    p.add_argument("--frame-end", type=int, default=None, help="Inclusive end index (dataset slice).")
+    p.add_argument("--frame-end", type=int, default=None)
     p.add_argument("--val-frame-stride", type=int, default=None)
     p.add_argument("--patch-size", type=int, nargs=3, metavar=("T", "H", "W"), default=None)
-    p.add_argument("--crop-frame", type=str, default=None, help='null | "square" | "circle" — use "null" to clear.')
-    p.add_argument("--crop-radius", type=int, default=None, help="Used when crop_frame is set.")
+    p.add_argument(
+        "--linear-spatial-hw",
+        type=int,
+        nargs=2,
+        metavar=("H", "W"),
+        default=None,
+        help="Trimmed spatial size (must match dataloader output). Default: infer from stats + patch.",
+    )
+    p.add_argument("--crop-frame", type=str, default=None)
+    p.add_argument("--crop-radius", type=int, default=None)
     p.add_argument(
         "--preload-into-ram",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Preload trials into RAM (default: from YAML).",
     )
     p.add_argument(
         "--pin-memory",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="DataLoader pin_memory (default: from YAML).",
     )
     p.add_argument(
         "--use-amp",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="CUDA autocast+GradScaler (default: from YAML; MAE_2D_full sets use_amp=false for l1_ssim stability).",
     )
 
-    # Model
-    p.add_argument("--backbone", type=str, default=None, help="resnet18 | MAEShallowCNNBackbone")
     p.add_argument("--channels", type=int, default=None)
-    p.add_argument("--hidden-dim", type=int, default=None)
-    p.add_argument(
-        "--pretrained",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Pretrained backbone weights.",
-    )
     p.add_argument(
         "--normalize-loss",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="MAE loss normalize flag (default: from YAML).",
     )
     p.add_argument(
         "--crop-loss",
         type=str,
         default=None,
-        help='Loss crop: null | "square" | "circle" (matches YAML crop_loss).',
+        help='null | "square" | "circle"',
     )
+    p.add_argument("--crop-loss-radius", type=int, default=None)
     p.add_argument(
-        "--crop-loss-radius",
-        type=int,
+        "--loss-type",
+        type=str,
         default=None,
-        help="Pixel radius for crop_loss (matches YAML crop_loss_radius; default from config if omitted).",
+        help='Training loss_type for MAELoss: "mse" | "l1" | "l1_mse" | "l1_ssim" | "mse_ssim"',
     )
 
-    # Training
     p.add_argument("--epochs", type=int, default=None)
     p.add_argument("--batch-size", type=int, default=None)
     p.add_argument("--lr", type=float, default=None)
     p.add_argument("--weight-decay", type=float, default=None)
+    p.add_argument(
+        "--linear-l1-penalty",
+        type=float,
+        default=None,
+        help="L1 penalty on linear weights (0 = ridge only via weight_decay).",
+    )
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--max-grad-norm", type=float, default=None)
     p.add_argument("--ckpt-dir", type=str, default=None)
     p.add_argument("--log-dir", type=str, default=None)
-    p.add_argument("--results-dir", type=str, default=None, help="Optional; else temporal_eval under ckpt_dir.")
+    p.add_argument("--results-dir", type=str, default=None)
+    p.add_argument(
+        "--temporal-eval-per-metric-plots",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Save one temporal PNG per metric (default: from YAML).",
+    )
+    p.add_argument(
+        "--resume",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Resume from latest checkpoint in ckpt_dir (default: false; Colab-safe).",
+    )
+    p.add_argument(
+        "--resume-checkpoint-path",
+        type=str,
+        default=None,
+        help="Explicit checkpoint .pt path when resuming (optional).",
+    )
 
     p.add_argument("--train-num-workers", type=int, default=4)
     p.add_argument("--val-num-workers", type=int, default=0)
@@ -192,27 +219,22 @@ def main(argv: Optional[List[str]] = None) -> None:
         overrides=overrides,
     )
 
-    if cfg.get("model") != "mae_2d":
+    if cfg.get("model") != "linear_mae_2d":
         print(
-            f"[train_mae_2d] Warning: config has model={cfg.get('model')!r}; "
-            f"this script trains MAE 2D. Forcing model='mae_2d'."
+            f"[train_linear_mae_2d] Warning: config has model={cfg.get('model')!r}; "
+            f"forcing model='linear_mae_2d'."
         )
-        cfg["model"] = "mae_2d"
+        cfg["model"] = "linear_mae_2d"
 
-    # MAE 2D expects single-frame inputs (B, C, H, W).
-    # If clip_length > 1 is requested, DataLoader yields (B, C, T, H, W),
-    # which will fail in Conv2d backbones.
     if int(cfg.get("clip_length", 1)) > 1:
-        requested_clip = cfg.get("clip_length")
         print(
-            "[train_mae_2d] Warning: clip_length "
-            f"{requested_clip} is incompatible with model='mae_2d'. "
-            "Forcing clip_length=1. Use scripts/train_mae_2d_lstm.py for clip_length>1."
+            "[train_linear_mae_2d] Warning: clip_length > 1 is not supported for linear_mae_2d. "
+            "Forcing clip_length=1."
         )
         cfg["clip_length"] = 1
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[train_mae_2d] Using device: {device}")
+    print(f"[train_linear_mae_2d] Using device: {device}")
 
     train_loader, val_loader, test_loader = build_dataloaders(
         cfg,
@@ -234,8 +256,11 @@ def main(argv: Optional[List[str]] = None) -> None:
         device=device,
     )
 
-    print("[train_mae_2d] Final test metrics:", eval_metrics)
-    print("[train_mae_2d] Temporal metrics keys (start_frames):", sorted(temporal_metrics.keys()))
+    print("[train_linear_mae_2d] Final test metrics:", eval_metrics)
+    print(
+        "[train_linear_mae_2d] Temporal test keys (start_frames):",
+        sorted(temporal_metrics.keys()),
+    )
 
 
 if __name__ == "__main__":

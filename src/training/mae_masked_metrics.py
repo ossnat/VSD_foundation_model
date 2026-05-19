@@ -147,6 +147,29 @@ def masked_ssim_per_sample(
     return torch.stack(out, dim=0)
 
 
+def flatten_pearson_r_per_sample(
+    reconstruction: torch.Tensor,
+    video_target: torch.Tensor,
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    """
+    Pearson r between flattened predicted and original frames, per sample.
+
+    reconstruction, video_target: (B, C, H, W) or (B, C, T, H, W). Multi-frame clips
+    are flattened across C and T so each sample yields one correlation coefficient.
+    """
+    B = reconstruction.shape[0]
+    flat_r = reconstruction.reshape(B, -1)
+    flat_t = video_target.reshape(B, -1)
+    r_mean = flat_r.mean(dim=1, keepdim=True)
+    t_mean = flat_t.mean(dim=1, keepdim=True)
+    r_c = flat_r - r_mean
+    t_c = flat_t - t_mean
+    num = (r_c * t_c).sum(dim=1)
+    den = torch.sqrt((r_c.pow(2).sum(dim=1)) * (t_c.pow(2).sum(dim=1))).clamp_min(eps)
+    return num / den
+
+
 def aggregate_batch_metrics(
     recon_norm: torch.Tensor,
     target_norm: torch.Tensor,
