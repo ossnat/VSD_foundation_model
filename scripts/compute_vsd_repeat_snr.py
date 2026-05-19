@@ -58,8 +58,8 @@ EPS = 1e-12
 
 
 def _default_processed_root(project_root: Path) -> Path:
-    """Project lives in .../VSD_foundation_model; Data is sibling under parent."""
-    return project_root.parent / "Data" / "FoundationData" / "ProcessedData"
+    """Processed H5 root: ``<project_root>/Data/FoundationData/ProcessedData``."""
+    return project_root / "Data" / "FoundationData" / "ProcessedData"
 
 
 def _iter_h5_files(monkey_dir: Path) -> Iterator[Path]:

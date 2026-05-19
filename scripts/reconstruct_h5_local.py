@@ -40,8 +40,9 @@ from src.training.trainer import Trainer
 from src.utils.logger import TBLogger, set_seed
 
 
-DEFAULT_H5_ROOT = Path("/Users/ossnat/GondaResearch/VSD_FM/Data/FoundationData/ProcessedData")
-DEFAULT_CKPT_ROOT = Path("/Users/ossnat/GondaResearch/VSD_FM/TrainedModels")
+_PROJECT = Path(__file__).resolve().parent.parent
+DEFAULT_H5_ROOT = _PROJECT / "Data" / "FoundationData" / "ProcessedData"
+DEFAULT_CKPT_ROOT = _PROJECT / "checkpoints"
 
 
 def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
@@ -338,11 +339,12 @@ def main(argv: Optional[List[str]] = None) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = build_ssl_model(cfg).to(device)
     ckpt_path = resolve_checkpoint_file(ckpt_dir, args.checkpoint_path)
-    state = torch.load(ckpt_path, map_location=device)
+    from src.experiments.mae_2d_lstm.checkpoint_utils import load_checkpoint_into_model
+
     try:
-        model.load_state_dict(state, strict=True)
+        load_checkpoint_into_model(model, ckpt_path, device)
     except Exception:
-        model.encoder.load_state_dict(state, strict=True)
+        load_checkpoint_into_model(model, ckpt_path, device, encoder_only=True)
     model.eval()
     print(f"[reconstruct_h5_local] loaded checkpoint: {ckpt_path}")
 

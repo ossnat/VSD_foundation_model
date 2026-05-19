@@ -45,6 +45,16 @@ def _parse_overrides_from_args(args: argparse.Namespace) -> Dict[str, Any]:
         overrides["frame_start"] = args.frame_start
     if args.frame_end is not None:
         overrides["frame_end"] = args.frame_end
+    if getattr(args, "resume", None) is not None:
+        overrides["resume"] = bool(args.resume)
+    if getattr(args, "auto_resume", None) is not None:
+        overrides["auto_resume"] = bool(args.auto_resume)
+    if getattr(args, "resume_checkpoint_path", None):
+        overrides["resume_checkpoint_path"] = args.resume_checkpoint_path
+    if getattr(args, "ckpt_dir", None):
+        overrides["ckpt_dir"] = args.ckpt_dir
+    if getattr(args, "log_dir", None):
+        overrides["log_dir"] = args.log_dir
     return overrides
 
 
@@ -125,6 +135,21 @@ def main() -> None:
         default=0,
         help="Number of DataLoader workers for test split.",
     )
+    parser.add_argument(
+        "--resume",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Force resume from checkpoint in ckpt_dir.",
+    )
+    parser.add_argument(
+        "--auto-resume",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Resume automatically when checkpoints exist (default: from YAML).",
+    )
+    parser.add_argument("--resume-checkpoint-path", type=str, default=None)
+    parser.add_argument("--ckpt-dir", type=str, default=None)
+    parser.add_argument("--log-dir", type=str, default=None)
 
     args = parser.parse_args()
 
@@ -134,7 +159,7 @@ def main() -> None:
     cfg = load_and_prepare_config(
         base_cfg_path=args.config,
         project_root=project_root,
-        data_root=None,  # assume Data/ is sibling of project root
+        data_root=None,
         overrides=overrides,
     )
 

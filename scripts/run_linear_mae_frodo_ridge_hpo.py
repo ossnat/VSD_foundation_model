@@ -27,8 +27,8 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-DEFAULT_FRODO_DIR = Path(
-    "/Users/ossnat/GondaResearch/VSD_FM/Data/FoundationData/ProcessedData/frodo"
+DEFAULT_FRODO_DIR = (
+    _PROJECT_ROOT / "Data" / "FoundationData" / "ProcessedData" / "frodo"
 )
 DEFAULT_OUT_DIR = _PROJECT_ROOT / "checkpoints_linear_mae2d"
 MONKEY = "frodo"

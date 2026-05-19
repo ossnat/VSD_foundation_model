@@ -253,15 +253,14 @@ def main() -> None:
 
     model = build_ssl_model(cfg).to(device)
     ckpt_file = resolve_checkpoint_file(ckpt_dir, args.checkpoint_path)
-    state = torch.load(ckpt_file, map_location=device)
+    from src.experiments.mae_2d_lstm.checkpoint_utils import load_checkpoint_into_model
 
     loaded_mode = "full_model_state_dict"
     try:
-        model.load_state_dict(state, strict=True)
+        load_checkpoint_into_model(model, ckpt_file, device)
     except Exception:
-        # fallback for encoder-only checkpoints
         if hasattr(model, "encoder"):
-            model.encoder.load_state_dict(state, strict=True)
+            load_checkpoint_into_model(model, ckpt_file, device, encoder_only=True)
             loaded_mode = "encoder_only_state_dict"
         else:
             raise

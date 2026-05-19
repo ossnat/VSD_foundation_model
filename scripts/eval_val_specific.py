@@ -147,12 +147,13 @@ def main(argv: Optional[List[str]] = None) -> None:
     )
 
     model = build_ssl_model(cfg).to(device)
+    from src.experiments.mae_2d_lstm.checkpoint_utils import load_checkpoint_into_model
+
     ckpt_file = resolve_checkpoint_file(ckpt_dir, args.checkpoint_path)
-    state = torch.load(ckpt_file, map_location=device)
     try:
-        model.load_state_dict(state, strict=True)
+        load_checkpoint_into_model(model, ckpt_file, device)
     except Exception:
-        model.encoder.load_state_dict(state, strict=True)
+        load_checkpoint_into_model(model, ckpt_file, device, encoder_only=True)
     model.eval()
     print(f"[eval_val_specific] loaded checkpoint: {ckpt_file}")
 

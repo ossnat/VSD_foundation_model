@@ -61,26 +61,42 @@ class Trainer:
             json.dump(meta, f, indent=2)
         torch.save({"optimizer": self.opt.state_dict(), **meta}, self._training_state_pt_path())
 
+    def _should_resume(self, ckpt_dir: Path) -> bool:
+        """Resume when explicitly requested or when auto_resume finds prior checkpoints."""
+        if self.cfg.get("resume") is False:
+            return False
+        if self.cfg.get("resume", False):
+            return True
+        if not self.cfg.get("auto_resume", True):
+            return False
+        from src.experiments.mae_2d_lstm.checkpoint_utils import has_training_checkpoint
+
+        return has_training_checkpoint(ckpt_dir)
+
+    @staticmethod
+    def _load_model_weights(model, ckpt_path: Path, device) -> None:
+        state = torch.load(ckpt_path, map_location=device)
+        if isinstance(state, dict) and "model" in state:
+            model.load_state_dict(state["model"], strict=True)
+        else:
+            model.load_state_dict(state, strict=True)
+
     def _try_resume(
         self,
     ) -> Tuple[int, int, List[float], List[Optional[float]]]:
         """
-        Load latest model checkpoint + training_state.json when cfg['resume'] is true.
+        Load latest training checkpoint + training_state when resume/auto_resume applies.
         Returns (start_epoch, global_step, train_loss_history, val_loss_history).
         """
-        if not self.cfg.get("resume", False):
+        ckpt_dir = Path(self.cfg.get("ckpt_dir", "checkpoints"))
+        if not self._should_resume(ckpt_dir):
             return 0, 0, [], []
 
-        from src.experiments.mae_2d_lstm.checkpoint_utils import resolve_checkpoint_file
+        from src.experiments.mae_2d_lstm.checkpoint_utils import resolve_resume_checkpoint
 
-        ckpt_dir = Path(self.cfg.get("ckpt_dir", "checkpoints"))
         explicit = self.cfg.get("resume_checkpoint_path")
-        ckpt_path = resolve_checkpoint_file(ckpt_dir, explicit_path=explicit)
-        state = torch.load(ckpt_path, map_location=self.device)
-        if isinstance(state, dict) and "model" in state:
-            self.model.load_state_dict(state["model"], strict=True)
-        else:
-            self.model.load_state_dict(state, strict=True)
+        ckpt_path = resolve_resume_checkpoint(ckpt_dir, explicit_path=explicit)
+        self._load_model_weights(self.model, ckpt_path, self.device)
         print(f"[Trainer] Resumed model weights from {ckpt_path}")
 
         start_epoch = 0
@@ -214,11 +230,40 @@ class Trainer:
             else:
                 val_loss_epoch_history.append(None)
 
-            # Save checkpoint each epoch (state_dict only — eval scripts expect this format)
-            ckpt_path = os.path.join(self.cfg.get("ckpt_dir", "checkpoints"), f"epoch_{epoch+1}.pt")
-            torch.save(self.model.state_dict(), ckpt_path)
+            epoch_num = epoch + 1
+            ckpt_dir = self.cfg.get("ckpt_dir", "checkpoints")
+            ckpt_path = os.path.join(ckpt_dir, f"epoch_{epoch_num}.pt")
+            torch.save(
+                {"model": self.model.state_dict(), "epoch": epoch_num},
+                ckpt_path,
+            )
+
+            # Per-epoch validation metrics (for crash recovery / monitoring)
+            if val_loader is not None and self.cfg.get("save_metrics_each_epoch", True):
+                metrics_dir = os.path.join(ckpt_dir, "analysis", "metrics")
+                os.makedirs(metrics_dir, exist_ok=True)
+                try:
+                    val_metrics = self.evaluate_metrics(val_loader, split_name="val")
+                    metrics_path = os.path.join(
+                        metrics_dir, f"metrics_val_epoch_{epoch_num:04d}.json"
+                    )
+                    with open(metrics_path, "w") as f:
+                        json.dump(
+                            {
+                                "epoch": epoch_num,
+                                "train_loss_epoch": mean_train_loss,
+                                "val_loss_epoch": val_loss_epoch_history[-1],
+                                "metrics": val_metrics,
+                            },
+                            f,
+                            indent=2,
+                            default=str,
+                        )
+                except Exception as exc:
+                    print(f"[Trainer] Warning: epoch metrics save failed ({exc}).")
+
             self._save_training_state(
-                epoch + 1,
+                epoch_num,
                 train_loss_epoch_history,
                 val_loss_epoch_history,
                 global_step,

@@ -5,6 +5,7 @@ from typing import Dict, Any, Optional, Tuple
 import pandas as pd
 
 from src.data import load_dataset
+from src.utils.data_paths import resolve_target_h5_path
 
 
 def _filter_split_csv_missing_files(
@@ -28,15 +29,10 @@ def _filter_split_csv_missing_files(
         print("[build_dataloaders] 'target_file' column missing in split CSV; using original file.")
         return split_csv_path
 
-    root_parent = project_root.parent
     exists_mask = []
     resolved_paths = []
     for tf in df["target_file"]:
-        tf_path = Path(tf)
-        if not tf_path.is_absolute():
-            abs_path = (root_parent / tf_path).resolve()
-        else:
-            abs_path = tf_path
+        abs_path = resolve_target_h5_path(project_root, tf)
         exists_mask.append(abs_path.exists())
         resolved_paths.append(str(abs_path))
 

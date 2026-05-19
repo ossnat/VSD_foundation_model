@@ -1,23 +1,31 @@
-import pytest
-import yaml
+"""Minimal smoke test: build mae_2d and run one forward pass (no data files)."""
 
-# Gracefully skip this optional smoke test if builder functions are not present
-try:
-    from src.data.datasets import build_dataset
-    from src.models import build_ssl_model
-except Exception:
-    pytest.skip(
-        "Skipping smoke test: build_dataset/build_ssl_model not available in this codebase",
-        allow_module_level=True,
-    )
+import torch
+
+from src.models import build_ssl_model
 
 
 def test_build_and_forward():
-    cfg = yaml.safe_load(open("configs/default.yaml","r"))
-    ds = build_dataset(cfg, split="train")
-    sample = ds[0]
-    vid = sample["video"]  # (1,T,H,W)
-    vid = vid.unsqueeze(0)  # (B=1,C,T,H,W)
+    cfg = {
+        "model": "mae_2d",
+        "backbone": "resnet18",
+        "pretrained": False,
+        "channels": 1,
+        "hidden_dim": 64,
+        "normalize_loss": True,
+        "loss_type": "mse",
+    }
     model = build_ssl_model(cfg)
-    out = model(vid)
-    assert "loss" in out and out["recon_patches"].shape == out["target_patches"].shape
+    model.eval()
+    b, c, t, h, w = 1, 1, 1, 32, 32
+    video = torch.randn(b, c, t, h, w)
+    mask = torch.ones(b, 1, t, h, w)
+    mask[..., 8:24, 8:24] = 0.0
+    batch = {
+        "video_masked": video * mask,
+        "video_target": video,
+        "mask": mask,
+    }
+    out = model(batch)
+    assert "loss" in out
+    assert torch.isfinite(out["loss"])
