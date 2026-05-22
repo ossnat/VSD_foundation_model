@@ -1,33 +1,55 @@
 """
-Resolve dataset paths relative to the project root.
+Resolve dataset paths for the standard workspace layout::
 
-All config paths should be written as ``Data/...`` (repo-local ``Data/`` directory).
+    <workspace>/
+        Data/FoundationData/...
+        VSD_foundation_model/    # project_root (this repo)
+
+Config YAML paths should start with ``Data/...`` (sibling of the repo, not inside it).
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Union
 
 PathLike = Union[str, Path]
 
 DATA_PREFIX = "Data"
 
 
+def workspace_root(project_root: Path) -> Path:
+    """Parent of the repo; contains ``Data/`` and ``VSD_foundation_model/``."""
+    return project_root.resolve().parent
+
+
 def data_dir(project_root: Path) -> Path:
-    """Return ``<project_root>/Data``."""
-    return (project_root / DATA_PREFIX).resolve()
+    """Return ``<workspace>/Data``."""
+    return (workspace_root(project_root) / DATA_PREFIX).resolve()
 
 
-def resolve_repo_path(project_root: Path, path_value: PathLike) -> Path:
+def _starts_with_data_prefix(path_value: PathLike) -> bool:
+    s = str(path_value).replace("\\", "/")
+    return s == DATA_PREFIX or s.startswith(f"{DATA_PREFIX}/")
+
+
+def resolve_data_path(project_root: Path, path_value: PathLike) -> Path:
     """
-    Resolve a config or CSV path under the repository.
+    Resolve a path that refers to shared data under ``Data/``.
 
-    - Absolute paths are returned as-is.
-    - Paths starting with ``Data/`` are resolved under ``project_root``.
-    - Other relative paths are also resolved under ``project_root`` (legacy).
+    - Absolute paths: returned as-is.
+    - ``Data/...`` or ``Data``: under ``<workspace>/Data/...``.
     """
-    project_root = project_root.resolve()
+    p = Path(path_value)
+    if p.is_absolute():
+        return p.resolve()
+    if _starts_with_data_prefix(path_value):
+        return (workspace_root(project_root) / p).resolve()
+    return (project_root / p).resolve()
+
+
+def resolve_project_path(project_root: Path, path_value: PathLike) -> Path:
+    """Resolve paths relative to the repo (checkpoints, logs, etc.)."""
     p = Path(path_value)
     if p.is_absolute():
         return p.resolve()
@@ -39,7 +61,7 @@ def resolve_config_data_paths(cfg: Dict[str, Any], project_root: Path) -> Dict[s
     for key in ("split_csv_path", "stats_json_path", "processed_root"):
         value = cfg.get(key)
         if value:
-            cfg[key] = str(resolve_repo_path(project_root, value))
+            cfg[key] = str(resolve_data_path(project_root, value))
     return cfg
 
 
@@ -48,9 +70,10 @@ def resolve_target_h5_path(project_root: Path, target_file: PathLike) -> Path:
     Resolve an H5 path from a split CSV ``target_file`` cell.
 
     Handles:
-      - absolute paths that exist
-      - ``Data/FoundationData/...`` relative to repo root
-      - Colab-style ``/content/.../Data/...`` by re-rooting under ``project_root/Data/...``
+      - absolute paths that exist on disk
+      - ``Data/FoundationData/...`` under workspace sibling ``Data/``
+      - machine-specific prefixes (e.g. Colab ``/content/.../Data/...``) by
+        re-rooting under ``<workspace>/Data/...``
     """
     project_root = project_root.resolve()
     p = Path(target_file)
@@ -58,18 +81,20 @@ def resolve_target_h5_path(project_root: Path, target_file: PathLike) -> Path:
     if p.is_absolute() and p.exists():
         return p.resolve()
 
-    # Repo-relative Data/...
-    candidate = resolve_repo_path(project_root, p)
+    candidate = resolve_data_path(project_root, p)
     if candidate.exists():
-        return candidate
+        return candidate.resolve()
 
-    # Strip machine-specific prefix up to and including "Data"
     parts = p.parts
     if DATA_PREFIX in parts:
         idx = parts.index(DATA_PREFIX)
         rel = Path(*parts[idx:])
-        candidate = project_root / rel
+        candidate = workspace_root(project_root) / rel
         if candidate.exists():
             return candidate.resolve()
 
-    return resolve_repo_path(project_root, p)
+    return candidate.resolve()
+
+
+# Back-compat alias used during earlier refactor
+resolve_repo_path = resolve_data_path

@@ -7,7 +7,7 @@ MAE_3D_VideoMAE_2D_CNN_V2.ipynb, but with cleaner structure:
 
 - Load a base config (e.g. configs/MAE_2D_LSTM_full.yaml)
 - Optionally apply flat overrides via CLI
-- Resolve data paths against a local Data/ directory
+- Resolve data paths against ``Data/`` (sibling of this repo under the workspace parent)
 - Build train/val/test loaders (skipping rows whose H5 files are missing)
 - Build the MAE 2D+LSTM model
 - Train with Trainer

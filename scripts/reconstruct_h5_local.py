@@ -41,7 +41,9 @@ from src.utils.logger import TBLogger, set_seed
 
 
 _PROJECT = Path(__file__).resolve().parent.parent
-DEFAULT_H5_ROOT = _PROJECT / "Data" / "FoundationData" / "ProcessedData"
+DEFAULT_H5_ROOT = (
+    _PROJECT.parent / "Data" / "FoundationData" / "ProcessedData"
+)
 DEFAULT_CKPT_ROOT = _PROJECT / "checkpoints"
 
 

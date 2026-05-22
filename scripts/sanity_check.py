@@ -27,6 +27,7 @@ def _run_env_check(device: str) -> int:
 def _run_pytest(with_data: bool) -> int:
     print("\n=== Pytest ===\n")
     tests = [
+        "tests/test_data_paths.py",
         "tests/test_smoke.py",
         "tests/test_models_unitest.py",
     ]

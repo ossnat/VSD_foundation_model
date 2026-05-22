@@ -3,7 +3,7 @@ from typing import Dict, Any, Optional
 
 import yaml
 
-from src.utils.data_paths import resolve_config_data_paths
+from src.utils.data_paths import DATA_PREFIX, resolve_config_data_paths
 
 
 def load_and_prepare_config(
@@ -16,19 +16,17 @@ def load_and_prepare_config(
     Load a base YAML config for MAE experiments, apply overrides, and resolve paths.
 
     Data paths in YAML should start with ``Data/...`` and resolve under
-    ``<project_root>/Data/...``.
+    ``<workspace>/Data/...`` where workspace is the parent of ``project_root``.
 
     Args:
         base_cfg_path: Path to the base YAML config (relative to project_root or absolute).
         project_root: Root directory of the VSD_foundation_model project.
-        data_root: Unused; kept for API compatibility. Data lives at ``project_root/Data``.
+        data_root: Optional override for ``<workspace>/Data`` (default: ``project_root.parent / Data``).
         overrides: Optional flat dict of config key -> new value.
 
     Returns:
         A config dict ready to be passed into data/model builders.
     """
-    del data_root  # Data is always repo-local: project_root / "Data"
-
     cfg_path = Path(base_cfg_path)
     if not cfg_path.is_absolute():
         cfg_path = project_root / cfg_path
@@ -43,6 +41,17 @@ def load_and_prepare_config(
             cfg[k] = v
 
     resolve_config_data_paths(cfg, project_root)
+    if data_root is not None:
+        dr = Path(data_root).resolve()
+        for key in ("split_csv_path", "stats_json_path", "processed_root"):
+            value = cfg.get(key)
+            if not value:
+                continue
+            p = Path(value)
+            if DATA_PREFIX in p.parts:
+                idx = p.parts.index(DATA_PREFIX)
+                rel = Path(*p.parts[idx + 1 :])
+                cfg[key] = str((dr / rel).resolve())
 
     for key in ("ckpt_dir", "log_dir", "results_dir"):
         value = cfg.get(key)
