@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-REPO="${REPO:-/home/lab/ossnat/Experiments/VSD_foundation_model}"
+REPO="${REPO:-/home/lab/ossnat/VSD_FM/VSD_foundation_model}"
 
 cd "${REPO}"
 source .venv/bin/activate
