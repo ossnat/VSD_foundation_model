@@ -14,6 +14,8 @@ from torch.optim import AdamW
 from torch.cuda.amp import autocast, GradScaler
 from tqdm import tqdm
 
+from src.training.lr_schedule import build_lr_scheduler
+
 try:
     import matplotlib.pyplot as plt
 except Exception:  # matplotlib might not be available in some environments
@@ -33,8 +35,22 @@ class Trainer:
             lr=cfg.get("lr", 1e-4),
             weight_decay=cfg.get("weight_decay", 0.05),
         )
+        self.scheduler = build_lr_scheduler(self.opt, cfg)
         self.scaler = GradScaler()
+        self._early_stop_best: Optional[float] = None
+        self._early_stop_wait = 0
+        self._stopped_early = False
         os.makedirs(cfg.get("ckpt_dir", "checkpoints"), exist_ok=True)
+        if self.scheduler is not None:
+            print(
+                f"[Trainer] LR scheduler: {cfg.get('scheduler_type')} "
+                f"(warmup_epochs={cfg.get('warmup_epochs', 0)})"
+            )
+        if cfg.get("early_stopping"):
+            print(
+                f"[Trainer] Early stopping: metric={cfg.get('early_stopping_metric', 'ssim_masked')} "
+                f"patience={cfg.get('early_stopping_patience', 5)}"
+            )
 
     def _training_state_json_path(self) -> str:
         return os.path.join(self.cfg.get("ckpt_dir", "checkpoints"), "training_state.json")
@@ -55,11 +71,17 @@ class Trainer:
             "global_step": global_step,
             "train_loss_epoch": train_loss_epoch_history,
             "val_loss_epoch": val_loss_epoch_history,
+            "stopped_early": self._stopped_early,
+            "early_stop_best": self._early_stop_best,
+            "early_stop_wait": self._early_stop_wait,
         }
         json_path = self._training_state_json_path()
         with open(json_path, "w") as f:
             json.dump(meta, f, indent=2)
-        torch.save({"optimizer": self.opt.state_dict(), **meta}, self._training_state_pt_path())
+        payload: Dict[str, Any] = {"optimizer": self.opt.state_dict(), **meta}
+        if self.scheduler is not None:
+            payload["scheduler"] = self.scheduler.state_dict()
+        torch.save(payload, self._training_state_pt_path())
 
     def _should_resume(self, ckpt_dir: Path) -> bool:
         """Resume when explicitly requested or when auto_resume finds prior checkpoints."""
@@ -118,6 +140,11 @@ class Trainer:
             val_hist = list(ts.get("val_loss_epoch", []))
             if "optimizer" in ts:
                 self.opt.load_state_dict(ts["optimizer"])
+            if self.scheduler is not None and "scheduler" in ts:
+                self.scheduler.load_state_dict(ts["scheduler"])
+            self._stopped_early = bool(ts.get("stopped_early", False))
+            self._early_stop_best = ts.get("early_stop_best")
+            self._early_stop_wait = int(ts.get("early_stop_wait", 0))
             print(
                 f"[Trainer] Resumed training state: epoch={start_epoch}, "
                 f"global_step={global_step}, history_len={len(train_hist)}"
@@ -135,6 +162,69 @@ class Trainer:
                 f"(optimizer re-initialized)."
             )
         return start_epoch, global_step, train_hist, val_hist
+
+    def _early_stopping_score(
+        self,
+        val_metrics: Optional[Dict[str, float]],
+        val_loss: Optional[float],
+    ) -> Optional[float]:
+        metric_name = str(self.cfg.get("early_stopping_metric", "ssim_masked"))
+        if metric_name in ("val_loss", "loss") and val_loss is not None:
+            return float(val_loss)
+        if val_metrics and metric_name in val_metrics:
+            return float(val_metrics[metric_name])
+        if val_loss is not None:
+            return float(val_loss)
+        return None
+
+    @staticmethod
+    def _metric_improved(
+        score: float,
+        best: Optional[float],
+        mode: str,
+        min_delta: float,
+    ) -> bool:
+        if best is None:
+            return True
+        if mode == "max":
+            return score > best + min_delta
+        return score < best - min_delta
+
+    def _maybe_early_stop(
+        self,
+        epoch_num: int,
+        val_metrics: Optional[Dict[str, float]],
+        val_loss: Optional[float],
+    ) -> bool:
+        if not self.cfg.get("early_stopping"):
+            return False
+        score = self._early_stopping_score(val_metrics, val_loss)
+        if score is None or math.isnan(score):
+            return False
+
+        mode = str(self.cfg.get("early_stopping_mode", "max"))
+        min_delta = float(self.cfg.get("early_stopping_min_delta", 0.0))
+        patience = int(self.cfg.get("early_stopping_patience", 5))
+
+        if self._metric_improved(score, self._early_stop_best, mode, min_delta):
+            self._early_stop_best = score
+            self._early_stop_wait = 0
+            print(
+                f"[Trainer] Early-stop: new best {self.cfg.get('early_stopping_metric')}="
+                f"{score:.6f} at epoch {epoch_num}"
+            )
+            return False
+
+        self._early_stop_wait += 1
+        print(
+            f"[Trainer] Early-stop: no improvement ({self._early_stop_wait}/{patience}), "
+            f"score={score:.6f}, best={self._early_stop_best}"
+        )
+        if self._early_stop_wait >= patience:
+            self._stopped_early = True
+            print(f"[Trainer] Early stopping triggered at epoch {epoch_num}.")
+            return True
+        return False
 
     def fit(self, train_loader, val_loader):
         start_epoch, global_step, train_loss_epoch_history, val_loss_epoch_history = (
@@ -238,29 +328,46 @@ class Trainer:
                 ckpt_path,
             )
 
-            # Per-epoch validation metrics (for crash recovery / monitoring)
-            if val_loader is not None and self.cfg.get("save_metrics_each_epoch", True):
+            val_metrics_epoch: Optional[Dict[str, float]] = None
+            val_loss_epoch = val_loss_epoch_history[-1] if val_loss_epoch_history else None
+
+            # Per-epoch validation metrics (for crash recovery / monitoring / early stopping)
+            need_val_metrics = bool(
+                val_loader is not None
+                and (
+                    self.cfg.get("save_metrics_each_epoch", True)
+                    or self.cfg.get("early_stopping")
+                )
+            )
+            if need_val_metrics:
                 metrics_dir = os.path.join(ckpt_dir, "analysis", "metrics")
                 os.makedirs(metrics_dir, exist_ok=True)
                 try:
-                    val_metrics = self.evaluate_metrics(val_loader, split_name="val")
-                    metrics_path = os.path.join(
-                        metrics_dir, f"metrics_val_epoch_{epoch_num:04d}.json"
-                    )
-                    with open(metrics_path, "w") as f:
-                        json.dump(
-                            {
-                                "epoch": epoch_num,
-                                "train_loss_epoch": mean_train_loss,
-                                "val_loss_epoch": val_loss_epoch_history[-1],
-                                "metrics": val_metrics,
-                            },
-                            f,
-                            indent=2,
-                            default=str,
+                    val_metrics_epoch = self.evaluate_metrics(val_loader, split_name="val")
+                    if self.cfg.get("save_metrics_each_epoch", True):
+                        metrics_path = os.path.join(
+                            metrics_dir, f"metrics_val_epoch_{epoch_num:04d}.json"
                         )
+                        with open(metrics_path, "w") as f:
+                            json.dump(
+                                {
+                                    "epoch": epoch_num,
+                                    "train_loss_epoch": mean_train_loss,
+                                    "val_loss_epoch": val_loss_epoch,
+                                    "metrics": val_metrics_epoch,
+                                },
+                                f,
+                                indent=2,
+                                default=str,
+                            )
                 except Exception as exc:
                     print(f"[Trainer] Warning: epoch metrics save failed ({exc}).")
+
+            if self.scheduler is not None:
+                self.scheduler.step()
+                current_lr = self.opt.param_groups[0]["lr"]
+                self.logger.log_scalar("train/lr", current_lr, epoch)
+                print(f"  train/lr: {current_lr:.2e}")
 
             self._save_training_state(
                 epoch_num,
@@ -269,9 +376,15 @@ class Trainer:
                 global_step,
             )
 
+            if self._maybe_early_stop(epoch_num, val_metrics_epoch, val_loss_epoch):
+                break
+
         return {
             "train_loss_epoch": train_loss_epoch_history,
             "val_loss_epoch": val_loss_epoch_history,
+            "stopped_early": self._stopped_early,
+            "epochs_completed": len(train_loss_epoch_history),
+            "early_stop_best": self._early_stop_best,
         }
 
     def evaluate_metrics(self, loader, split_name: str = "train") -> dict:

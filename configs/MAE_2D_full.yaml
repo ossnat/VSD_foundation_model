@@ -43,6 +43,16 @@ lr: 5.84e-5 # 1.0e-4
 weight_decay: 0.03 # 0.05
 epochs: 100
 max_grad_norm: 1.0
+# LR schedule (Trainer): scheduler_type none | cosine; warmup_epochs; min_lr
+scheduler_type: none
+warmup_epochs: 3
+min_lr: 1.0e-6
+# Early stopping (Trainer): early_stopping true; early_stopping_patience; early_stopping_metric
+early_stopping: false
+early_stopping_patience: 5
+early_stopping_metric: ssim_masked
+early_stopping_mode: max
+early_stopping_min_delta: 1.0e-4
 auto_resume: true
 save_metrics_each_epoch: true
 # CUDA mixed precision (autocast) + l1_ssim often goes NaN; keep FP32 for stable MAE 2D training.
