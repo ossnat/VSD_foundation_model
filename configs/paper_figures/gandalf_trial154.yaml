@@ -1,0 +1,49 @@
+# Publication figure: Gandalf checkpoint, trial 154, frames 32-42.
+checkpoint_dir: Gandalf_checkpnt_res_l1_ssim
+training_config: configs/MAE_2D_full.yaml
+out_dir: Gandalf_checkpnt_res_l1_ssim/paper_trial154_f32-42
+seed: 17
+
+data:
+  h5_path: gandalf/session_270618b_condsAN.h5
+  trials: [trial_000011]
+  frame_start: 28
+  frame_end: 58
+  mask_ratio: 0.75
+
+# Detail panels: use detail_frame_specs when frames come from different trials.
+# Each panel can also set its own trial + frame (must be listed here for export).
+detail_frame_specs:
+  - {trial: trial_000001, frame: 38}
+  - {trial: trial_000032, frame: 38}
+# Multi-trial example:
+# detail_frame_specs:
+#   - {trial: trial_000154, frame: 32}
+#   - {trial: trial_000099, frame: 38}
+# data.trials is optional — all trials referenced above are auto-loaded.
+
+scatter:
+  n_points: 100
+  kinds: [real, scrambled]
+  panels:
+    - {x_metric: mse, y_metric: correlation}
+    - {x_metric: r2, y_metric: ssim}
+
+figure:
+  figsize: [14, 10]
+  dpi: 600
+  cmap: mapgeog
+  colorbar: false
+  panel_labels: true
+  out_filename: paper_figure_composite.png
+  suptitle: "" #MAE 2D reconstruction — Gandalf trial 154"
+  panels:
+    #- {type: mask_only, trial: trial_000154, frame: 32, row: 0, col: 0, title: "Mask (no frame)"}
+    - {type: original, trial: trial_000032, frame: 38, row: 0, col: 1, title: ""} #"Original"}
+    - {type: masked_input, trial: trial_000032, frame: 38, row: 0, col: 0, title: ""} #"Masked"}
+    - {type: reconstructed, trial: trial_000032, frame: 38, row: 0, col: 2, title: ""} #"Reconstructed"}
+    - {type: original, trial: trial_000001, frame: 38, row: 1, col: 1, title: ""} #"Original"}
+    #- {type: masked_input, trial: trial_000154, frame: 38, row: 1, col: 1, title: "Masked input"}
+    - {type: reconstructed, trial: trial_000001, frame: 38, row: 1, col: 2, title: ""} #"Reconstructed"}
+    - {type: scatter, x_metric: mse, y_metric: correlation, row: 1, col: 0, title: ""} #"MSE vs correlation"}
+   # - {type: scatter, x_metric: r2, y_metric: ssim, row: 2, col: 0, title: "R² vs SSIM"}

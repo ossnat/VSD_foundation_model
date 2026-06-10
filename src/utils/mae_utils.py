@@ -33,17 +33,10 @@ def load_config(config_path):
     with open(config_path, 'r') as f:
         cfg = yaml.safe_load(f)
 
-    # Resolve any relative data paths based on the directory that contains the project
-    # (parent.parent.parent from the config file, since Data/ is a sibling of the project root)
-    base_dir = config_path.resolve().parent.parent.parent
-    for key in ("split_csv_path", "stats_json_path", "processed_root"):
-        value = cfg.get(key)
-        if value is None:
-            continue
-        value_path = Path(value)
-        if not value_path.is_absolute():
-            full_path = (base_dir / value_path).resolve()
-            cfg[key] = str(full_path)
+    from src.utils.data_paths import resolve_config_data_paths
+
+    project_root = config_path.resolve().parent.parent
+    resolve_config_data_paths(cfg, project_root)
 
     # Check if using new CSV structure
     if 'split_csv_path' not in cfg or 'stats_json_path' not in cfg:

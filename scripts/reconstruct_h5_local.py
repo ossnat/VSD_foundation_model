@@ -8,7 +8,7 @@ dataset/masking/model/plot code path:
   - src.data.load_dataset (vsd_mae)
   - src.models.build_ssl_model
   - src.training.trainer.Trainer.evaluate_metrics
-  - src.experiments.mae_2d_lstm.vis_test_reconstruction.save_test_reconstruction_figure
+  - src.experiments.eval_plots.save_reconstruction_figure
 
 Default paths:
   - h5 root: /Users/ossnat/GondaResearch/VSD_FM/Data/FoundationData/ProcessedData
@@ -33,15 +33,18 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from src.data import load_dataset
-from src.experiments.mae_2d_lstm.checkpoint_utils import resolve_checkpoint_file
-from src.experiments.mae_2d_lstm.vis_test_reconstruction import save_test_reconstruction_figure
+from src.experiments.eval_core import resolve_and_load_checkpoint
+from src.experiments.eval_plots import save_reconstruction_figure
 from src.models import build_ssl_model
 from src.training.trainer import Trainer
 from src.utils.logger import TBLogger, set_seed
 
 
-DEFAULT_H5_ROOT = Path("/Users/ossnat/GondaResearch/VSD_FM/Data/FoundationData/ProcessedData")
-DEFAULT_CKPT_ROOT = Path("/Users/ossnat/GondaResearch/VSD_FM/TrainedModels")
+_PROJECT = Path(__file__).resolve().parent.parent
+DEFAULT_H5_ROOT = (
+    _PROJECT.parent / "Data" / "FoundationData" / "ProcessedData"
+)
+DEFAULT_CKPT_ROOT = _PROJECT / "checkpoints"
 
 
 def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
@@ -225,7 +228,7 @@ def _evaluate_one_trial_dataset(
     trial_out_dir = out_root / "plots" / trial_tag
     trial_out_dir.mkdir(parents=True, exist_ok=True)
 
-    save_test_reconstruction_figure(
+    save_reconstruction_figure(
         model=model,
         test_loader=eval_loader,
         device=trainer.device,
@@ -235,7 +238,7 @@ def _evaluate_one_trial_dataset(
         max_frames_per_clip=max_frames,
         plot_masked=False,
     )
-    save_test_reconstruction_figure(
+    save_reconstruction_figure(
         model=model,
         test_loader=eval_loader,
         device=trainer.device,
@@ -337,12 +340,7 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = build_ssl_model(cfg).to(device)
-    ckpt_path = resolve_checkpoint_file(ckpt_dir, args.checkpoint_path)
-    state = torch.load(ckpt_path, map_location=device)
-    try:
-        model.load_state_dict(state, strict=True)
-    except Exception:
-        model.encoder.load_state_dict(state, strict=True)
+    ckpt_path, _load_mode = resolve_and_load_checkpoint(model, ckpt_dir, args.checkpoint_path, device)
     model.eval()
     print(f"[reconstruct_h5_local] loaded checkpoint: {ckpt_path}")
 

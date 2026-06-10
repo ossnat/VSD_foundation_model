@@ -30,9 +30,15 @@ def _fail(msg: str) -> None:
     raise SystemExit(1)
 
 
+def _import_pkg(name: str) -> None:
+    mod = importlib.import_module("yaml" if name == "yaml" else name)
+    ver = getattr(mod, "__version__", "?")
+    _ok(f"{name} ({ver})")
+
+
 def _check_imports() -> None:
     print("[1/4] Third-party packages")
-    packages = [
+    required = [
         "torch",
         "torchvision",
         "tensorboard",
@@ -41,14 +47,22 @@ def _check_imports() -> None:
         "pandas",
         "tqdm",
         "matplotlib",
-        "einops",
         "yaml",
         "scipy",
     ]
-    for name in packages:
-        mod = importlib.import_module("yaml" if name == "yaml" else name)
-        ver = getattr(mod, "__version__", "?")
-        _ok(f"{name} ({ver})")
+    optional = [
+        "einops",  # only src/models/old_version/mae.py; install via requirements.txt
+    ]
+    for name in required:
+        try:
+            _import_pkg(name)
+        except ImportError as exc:
+            _fail(f"{name} missing — run: pip install -r requirements.txt ({exc})")
+    for name in optional:
+        try:
+            _import_pkg(name)
+        except ImportError:
+            print(f"  WARN  {name} not installed (optional; pip install -r requirements.txt)")
 
 
 def _check_torch(device: str) -> "object":

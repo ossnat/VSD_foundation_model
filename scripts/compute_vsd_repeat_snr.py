@@ -58,7 +58,7 @@ EPS = 1e-12
 
 
 def _default_processed_root(project_root: Path) -> Path:
-    """Project lives in .../VSD_foundation_model; Data is sibling under parent."""
+    """Processed H5 root: ``<workspace>/Data/FoundationData/ProcessedData``."""
     return project_root.parent / "Data" / "FoundationData" / "ProcessedData"
 
 

@@ -60,6 +60,7 @@ def _merge_cli_overrides(args: argparse.Namespace) -> Dict[str, Any]:
     set_if("backbone", args.backbone)
     set_if("channels", args.channels)
     set_if("hidden_dim", args.hidden_dim)
+    set_if("loss_type", getattr(args, "loss_type", None))
     set_if("crop_loss_radius", getattr(args, "crop_loss_radius", None))
 
     if getattr(args, "crop_loss", None) is not None:
@@ -84,6 +85,12 @@ def _merge_cli_overrides(args: argparse.Namespace) -> Dict[str, Any]:
     cr = getattr(args, "crop_radius", None)
     if cr is not None:
         o["crop_radius"] = cr
+
+    if getattr(args, "resume", None) is not None:
+        o["resume"] = bool(args.resume)
+    if getattr(args, "auto_resume", None) is not None:
+        o["auto_resume"] = bool(args.auto_resume)
+    set_if("resume_checkpoint_path", getattr(args, "resume_checkpoint_path", None))
 
     return o
 
@@ -171,6 +178,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--ckpt-dir", type=str, default=None)
     p.add_argument("--log-dir", type=str, default=None)
     p.add_argument("--results-dir", type=str, default=None, help="Optional; else temporal_eval under ckpt_dir.")
+    p.add_argument(
+        "--resume",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Force resume from checkpoint in ckpt_dir.",
+    )
+    p.add_argument(
+        "--auto-resume",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Resume automatically when checkpoints exist (default: from YAML, usually true).",
+    )
+    p.add_argument(
+        "--resume-checkpoint-path",
+        type=str,
+        default=None,
+        help="Explicit checkpoint .pt when resuming.",
+    )
+    p.add_argument("--loss-type", type=str, default=None)
 
     p.add_argument("--train-num-workers", type=int, default=4)
     p.add_argument("--val-num-workers", type=int, default=0)

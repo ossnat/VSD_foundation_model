@@ -211,3 +211,18 @@ __marimo__/
 cache/
 *.pkl
 *.cachetest_vsd_data.hdf5
+
+# Local SNR demo HDF5 tree (scripts/compute_vsd_repeat_snr.py)
+_snr_demo/
+
+checkpoints/
+checkpoints_hpo/
+checkpoints_mae2d/
+docs/
+local_splits/
+logs/
+logs_mae2d/
+scripts/aggregate_hpo_runs.py
+src/.DS_Store
+test_path_resolution_colab.py
+tests/test_resolve_target_file.py

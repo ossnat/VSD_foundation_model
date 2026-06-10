@@ -1,8 +1,9 @@
-import os
 from pathlib import Path
 from typing import Dict, Any, Optional
 
 import yaml
+
+from src.utils.data_paths import DATA_PREFIX, resolve_config_data_paths
 
 
 def load_and_prepare_config(
@@ -12,14 +13,15 @@ def load_and_prepare_config(
     overrides: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
-    Load a base YAML config for MAE 2D+LSTM, apply simple overrides, and
-    resolve data paths against a local Data directory.
+    Load a base YAML config for MAE experiments, apply overrides, and resolve paths.
+
+    Data paths in YAML should start with ``Data/...`` and resolve under
+    ``<workspace>/Data/...`` where workspace is the parent of ``project_root``.
 
     Args:
         base_cfg_path: Path to the base YAML config (relative to project_root or absolute).
         project_root: Root directory of the VSD_foundation_model project.
-        data_root: Optional path to the Data directory. If None, assumes a sibling
-                   'Data' directory next to project_root.
+        data_root: Optional override for ``<workspace>/Data`` (default: ``project_root.parent / Data``).
         overrides: Optional flat dict of config key -> new value.
 
     Returns:
@@ -34,27 +36,23 @@ def load_and_prepare_config(
     with open(cfg_path, "r") as f:
         cfg: Dict[str, Any] = yaml.safe_load(f)
 
-    # Apply simple flat overrides (e.g., monkeys, mask_ratio, clip_length, epochs)
     if overrides:
         for k, v in overrides.items():
             cfg[k] = v
 
-    # Determine data_root: default to sibling Data/ if not provided
-    if data_root is None:
-        data_root = project_root.parent / "Data"
+    resolve_config_data_paths(cfg, project_root)
+    if data_root is not None:
+        dr = Path(data_root).resolve()
+        for key in ("split_csv_path", "stats_json_path", "processed_root"):
+            value = cfg.get(key)
+            if not value:
+                continue
+            p = Path(value)
+            if DATA_PREFIX in p.parts:
+                idx = p.parts.index(DATA_PREFIX)
+                rel = Path(*p.parts[idx + 1 :])
+                cfg[key] = str((dr / rel).resolve())
 
-    # Resolve split_csv_path, stats_json_path, processed_root relative to data_root
-    for key in ("split_csv_path", "stats_json_path", "processed_root"):
-        value = cfg.get(key)
-        if not value:
-            continue
-        value_path = Path(value)
-        if not value_path.is_absolute():
-            # Treat as relative to the shared Data directory
-            resolved = (data_root / value_path.relative_to(value_path.parts[0])).resolve() if value_path.parts else data_root / value_path
-            cfg[key] = str(resolved)
-
-    # Ensure ckpt_dir and log_dir are at least present (relative to project root if needed)
     for key in ("ckpt_dir", "log_dir", "results_dir"):
         value = cfg.get(key)
         if value is None:
@@ -64,4 +62,3 @@ def load_and_prepare_config(
             cfg[key] = str((project_root / value_path).resolve())
 
     return cfg
-

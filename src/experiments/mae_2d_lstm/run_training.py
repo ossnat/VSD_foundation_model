@@ -6,8 +6,10 @@ import torch
 
 from src.training.trainer import Trainer
 from src.utils.logger import TBLogger, set_seed
-from src.experiments.mae_2d_lstm.vis_test_reconstruction import save_test_reconstruction_figure
-from src.experiments.mae_2d_lstm.temporal_eval_plots import save_temporal_per_metric_figures
+from src.experiments.eval_plots import (
+    save_reconstruction_figure,
+    save_temporal_per_metric_figures,
+)
 
 
 def run_training_and_temporal_eval(
@@ -152,7 +154,7 @@ def run_training_and_temporal_eval(
 
     for split, loader in (("val", val_loader), ("test", test_loader)):
         # original | reconstructed | |diff|
-        save_test_reconstruction_figure(
+        save_reconstruction_figure(
             model,
             loader,
             device,
@@ -163,7 +165,7 @@ def run_training_and_temporal_eval(
             plot_masked=False,
         )
         # original | masked_input | reconstructed | |diff|
-        save_test_reconstruction_figure(
+        save_reconstruction_figure(
             model,
             loader,
             device,

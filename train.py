@@ -17,17 +17,10 @@ def main(cfg_path: str):
     with open(cfg_path, "r") as f:
         cfg = yaml.safe_load(f)
 
-    # Resolve any relative data paths based on the directory that contains the project
-    # (parent.parent.parent from the config file, since Data/ is a sibling of the project root)
-    base_dir = cfg_path.resolve().parent.parent.parent
-    for key in ("split_csv_path", "stats_json_path", "processed_root"):
-        value = cfg.get(key)
-        if value is None:
-            continue
-        value_path = Path(value)
-        if not value_path.is_absolute():
-            full_path = (base_dir / value_path).resolve()
-            cfg[key] = str(full_path)
+    from src.utils.data_paths import resolve_config_data_paths
+
+    project_root = cfg_path.resolve().parent.parent
+    resolve_config_data_paths(cfg, project_root)
 
 
     set_seed(cfg.get("seed", 42))

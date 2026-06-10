@@ -83,6 +83,8 @@ def _merge_cli_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         o["temporal_eval_per_metric_plots"] = bool(args.temporal_eval_per_metric_plots)
     if getattr(args, "resume", None) is not None:
         o["resume"] = bool(args.resume)
+    if getattr(args, "auto_resume", None) is not None:
+        o["auto_resume"] = bool(args.auto_resume)
     set_if("resume_checkpoint_path", getattr(args, "resume_checkpoint_path", None))
 
     crop_frame_arg = getattr(args, "crop_frame", None)
@@ -190,7 +192,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--resume",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Resume from latest checkpoint in ckpt_dir (default: false; Colab-safe).",
+        help="Force resume from latest checkpoint in ckpt_dir.",
+    )
+    p.add_argument(
+        "--auto-resume",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Resume when checkpoints exist (default: from YAML, usually true).",
     )
     p.add_argument(
         "--resume-checkpoint-path",

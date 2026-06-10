@@ -44,6 +44,8 @@ lr: 5.0e-3
 weight_decay: 1.0e-2
 epochs: 50
 max_grad_norm: 1.0
+auto_resume: true
+save_metrics_each_epoch: true
 use_amp: false
 ckpt_dir: ./checkpoints_linear_mae2d
 log_dir: logs_linear_mae2d
