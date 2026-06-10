@@ -40,8 +40,10 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from src.experiments.mae_2d_lstm.build_dataloaders import build_dataloaders
 from src.experiments.mae_2d_lstm.load_config import load_and_prepare_config
-from src.experiments.mae_2d_lstm.temporal_eval_plots import save_temporal_per_metric_figures
-from src.experiments.mae_2d_lstm.vis_test_reconstruction import save_test_reconstruction_figure
+from src.experiments.eval_plots import (
+    save_reconstruction_figure,
+    save_temporal_per_metric_figures,
+)
 from src.models import build_ssl_model
 from src.training.trainer import Trainer
 from src.utils.logger import TBLogger, set_seed
@@ -266,11 +268,11 @@ def _run_post_train_eval(
     save_temporal_per_metric_figures(temporal_test, temporal_dir, split_name="test")
 
     for split, loader in (("val", val_loader), ("test", test_loader)):
-        save_test_reconstruction_figure(
+        save_reconstruction_figure(
             model, loader, device, out_dir=temporal_dir,
             split_name=split, num_batches=1, max_frames_per_clip=8, plot_masked=False,
         )
-        save_test_reconstruction_figure(
+        save_reconstruction_figure(
             model, loader, device, out_dir=temporal_dir,
             split_name=split, num_batches=1, max_frames_per_clip=8, plot_masked=True,
         )

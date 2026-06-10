@@ -25,9 +25,13 @@ import torch
 from torch.utils.data import DataLoader, Subset
 
 from src.experiments.mae_2d_lstm.build_dataloaders import build_dataloaders
-from src.experiments.mae_2d_lstm.checkpoint_utils import resolve_checkpoint_file
+from src.experiments.eval_core import (
+    build_cfg_overrides_from_args,
+    choose_eval_indices,
+    resolve_and_load_checkpoint,
+)
 from src.experiments.mae_2d_lstm.load_config import load_and_prepare_config
-from src.experiments.mae_2d_lstm.vis_test_reconstruction import save_test_reconstruction_figure
+from src.experiments.eval_plots import save_reconstruction_figure
 from src.models import build_ssl_model
 from src.training.trainer import Trainer
 from src.utils.logger import TBLogger, set_seed
@@ -85,74 +89,23 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _build_overrides(args: argparse.Namespace) -> Dict[str, Any]:
-    o: Dict[str, Any] = {}
-    if args.monkeys:
-        o["monkeys"] = args.monkeys
-    if args.mask_ratio is not None:
-        o["mask_ratio"] = args.mask_ratio
-    if args.clip_length is not None:
-        o["clip_length"] = args.clip_length
-    if args.patch_size is not None:
-        o["patch_size"] = list(args.patch_size)
-    if args.frame_start is not None:
-        o["frame_start"] = args.frame_start
-    if args.frame_end is not None:
-        o["frame_end"] = args.frame_end
-    if args.batch_size is not None:
-        o["batch_size"] = args.batch_size
-    if args.seed is not None:
-        o["seed"] = args.seed
-    if args.plot_retinotopic is not None:
-        o["plot_retinotopic"] = args.plot_retinotopic
+    o = build_cfg_overrides_from_args(
+        args,
+        keys=(
+            "monkeys",
+            "mask_ratio",
+            "clip_length",
+            "patch_size",
+            "frame_start",
+            "frame_end",
+            "batch_size",
+            "seed",
+            "plot_retinotopic",
+        ),
+    )
+    if "patch_size" in o:
+        o["patch_size"] = list(o["patch_size"])
     return o
-
-
-def _select_test_indices(
-    dataset: Any,
-    target_files: Optional[Sequence[str]],
-    subset_size: int,
-    seed: int,
-) -> Tuple[List[int], Dict[str, Any]]:
-    total = len(dataset)
-    if total == 0:
-        return [], {"mode": "empty", "matched_files": 0}
-
-    if target_files:
-        wanted_abs = set()
-        wanted_base = set()
-        for tf in target_files:
-            p = Path(tf)
-            wanted_base.add(p.name)
-            if p.is_absolute():
-                wanted_abs.add(str(p.resolve()))
-
-        selected: List[int] = []
-        if not hasattr(dataset, "trials") or not hasattr(dataset, "data_structure"):
-            raise ValueError(
-                "Dataset does not expose trials/data_structure needed for --target-files filtering."
-            )
-        for i, (row_idx, _clip_start) in enumerate(dataset.data_structure):
-            tf = str(dataset.trials.iloc[row_idx]["target_file"])
-            tf_abs = str(Path(tf).resolve())
-            tf_base = Path(tf).name
-            if tf_abs in wanted_abs or tf_base in wanted_base:
-                selected.append(i)
-
-        meta = {
-            "mode": "target_files",
-            "requested_files": list(target_files),
-            "matched_indices": len(selected),
-            "matched_files": len({Path(str(dataset.trials.iloc[dataset.data_structure[i][0]]["target_file"])).name for i in selected}) if selected else 0,
-        }
-        return selected, meta
-
-    # Random subset mode
-    rng = random.Random(seed)
-    k = min(max(subset_size, 1), total)
-    selected = list(range(total))
-    rng.shuffle(selected)
-    selected = selected[:k]
-    return selected, {"mode": "random_subset", "subset_size": k, "total_test_samples": total}
 
 
 def _select_sequence_vis_indices(
@@ -233,9 +186,9 @@ def main() -> None:
         test_num_workers=args.test_num_workers,
     )
 
-    selected_indices, subset_meta = _select_test_indices(
+    selected_indices, subset_meta = choose_eval_indices(
         dataset=test_loader.dataset,
-        target_files=args.target_files,
+        target_files=list(args.target_files) if args.target_files else None,
         subset_size=args.subset_size,
         seed=args.seed,
     )
@@ -252,18 +205,7 @@ def main() -> None:
     )
 
     model = build_ssl_model(cfg).to(device)
-    ckpt_file = resolve_checkpoint_file(ckpt_dir, args.checkpoint_path)
-    from src.experiments.mae_2d_lstm.checkpoint_utils import load_checkpoint_into_model
-
-    loaded_mode = "full_model_state_dict"
-    try:
-        load_checkpoint_into_model(model, ckpt_file, device)
-    except Exception:
-        if hasattr(model, "encoder"):
-            load_checkpoint_into_model(model, ckpt_file, device, encoder_only=True)
-            loaded_mode = "encoder_only_state_dict"
-        else:
-            raise
+    ckpt_file, loaded_mode = resolve_and_load_checkpoint(model, ckpt_dir, args.checkpoint_path, device)
     print(f"[eval_specific_subset] Loaded checkpoint: {ckpt_file} ({loaded_mode})")
 
     logger = TBLogger(log_dir=str(out_dir / "tb_logs"))
@@ -312,7 +254,7 @@ def main() -> None:
 
     vis_dir = out_dir / "plots"
     vis_dir.mkdir(parents=True, exist_ok=True)
-    save_test_reconstruction_figure(
+    save_reconstruction_figure(
         model=model,
         test_loader=vis_loader,
         device=device,
@@ -322,7 +264,7 @@ def main() -> None:
         max_frames_per_clip=max_frames,
         plot_masked=False,
     )
-    masked_plot_path = save_test_reconstruction_figure(
+    masked_plot_path = save_reconstruction_figure(
         model=model,
         test_loader=vis_loader,
         device=device,
@@ -408,7 +350,7 @@ def main() -> None:
         )
         vis_dir_r = retino_dir / "plots"
         vis_dir_r.mkdir(parents=True, exist_ok=True)
-        save_test_reconstruction_figure(
+        save_reconstruction_figure(
             model=model,
             test_loader=vis_loader_r,
             device=device,
@@ -418,7 +360,7 @@ def main() -> None:
             max_frames_per_clip=max_frames,
             plot_masked=False,
         )
-        save_test_reconstruction_figure(
+        save_reconstruction_figure(
             model=model,
             test_loader=vis_loader_r,
             device=device,

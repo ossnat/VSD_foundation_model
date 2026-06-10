@@ -42,42 +42,29 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from src.experiments.mae_2d_lstm.build_dataloaders import build_dataloaders
-from src.experiments.mae_2d_lstm.checkpoint_utils import resolve_checkpoint_file
+from src.experiments.eval_core import (
+    build_cfg_overrides_from_args,
+    select_indices_by_target_files,
+    enforce_mae_2d_clip_contract,
+    resolve_and_load_checkpoint,
+)
 from src.experiments.mae_2d_lstm.load_config import load_and_prepare_config
-from src.experiments.mae_2d_lstm.vis_test_reconstruction import save_test_reconstruction_figure
+from src.experiments.eval_plots import save_reconstruction_figure
 from src.models import build_ssl_model
 from src.training.trainer import Trainer
 from src.utils.logger import TBLogger, set_seed
 
 
 def _build_overrides(args: argparse.Namespace) -> Dict[str, Any]:
-    o: Dict[str, Any] = {}
-    if args.monkeys:
-        o["monkeys"] = list(args.monkeys)
-    if args.mask_ratio is not None:
-        o["mask_ratio"] = float(args.mask_ratio)
-    if args.clip_length is not None:
-        o["clip_length"] = int(args.clip_length)
-    if args.patch_size is not None:
-        o["patch_size"] = list(args.patch_size)
-    if args.frame_start is not None:
-        o["frame_start"] = int(args.frame_start)
-    if args.frame_end is not None:
-        o["frame_end"] = int(args.frame_end)
-    if args.batch_size is not None:
-        o["batch_size"] = int(args.batch_size)
+    o = build_cfg_overrides_from_args(
+        args,
+        keys=("monkeys", "mask_ratio", "clip_length", "patch_size", "frame_start", "frame_end", "batch_size"),
+    )
+    if "monkeys" in o:
+        o["monkeys"] = list(o["monkeys"])
+    if "patch_size" in o:
+        o["patch_size"] = list(o["patch_size"])
     return o
-
-
-def _select_val_indices(dataset: Any, target_files: List[str]) -> List[int]:
-    wanted_base = {Path(x).name for x in target_files}
-    wanted_abs = {str(Path(x).resolve()) for x in target_files if Path(x).is_absolute()}
-    selected: List[int] = []
-    for i, (row_idx, _clip_start) in enumerate(dataset.data_structure):
-        tf = str(dataset.trials.iloc[row_idx]["target_file"])
-        if Path(tf).name in wanted_base or str(Path(tf).resolve()) in wanted_abs:
-            selected.append(i)
-    return selected
 
 
 def main(argv: Optional[List[str]] = None) -> None:
@@ -111,11 +98,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     )
 
     # mae_2d: single-frame clips and temporal patch = 1
-    if cfg.get("model") == "mae_2d":
-        cfg["clip_length"] = 1
-        ps = cfg.get("patch_size")
-        if isinstance(ps, list) and len(ps) == 3:
-            cfg["patch_size"] = [1, int(ps[1]), int(ps[2])]
+    cfg = enforce_mae_2d_clip_contract(cfg)
 
     ckpt_dir = Path(args.checkpoint_dir).resolve()
     cfg["ckpt_dir"] = str(ckpt_dir)
@@ -132,7 +115,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         test_num_workers=args.test_num_workers,
     )
 
-    selected = _select_val_indices(val_loader.dataset, list(args.target_files))
+    selected, selection_meta = select_indices_by_target_files(val_loader.dataset, list(args.target_files))
     print(f"[eval_val_specific] matched val samples: {len(selected)}")
     if not selected:
         raise RuntimeError("No matching files in validation set. Check basenames and --monkeys.")
@@ -147,13 +130,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     )
 
     model = build_ssl_model(cfg).to(device)
-    from src.experiments.mae_2d_lstm.checkpoint_utils import load_checkpoint_into_model
-
-    ckpt_file = resolve_checkpoint_file(ckpt_dir, args.checkpoint_path)
-    try:
-        load_checkpoint_into_model(model, ckpt_file, device)
-    except Exception:
-        load_checkpoint_into_model(model, ckpt_file, device, encoder_only=True)
+    ckpt_file, _load_mode = resolve_and_load_checkpoint(model, ckpt_dir, args.checkpoint_path, device)
     model.eval()
     print(f"[eval_val_specific] loaded checkpoint: {ckpt_file}")
 
@@ -170,7 +147,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     max_frames = 4 if cfg.get("model") == "mae_2d_lstm" else 1
     n_vis = min(len(selected), max(1, int(args.max_vis_batches)))
 
-    save_test_reconstruction_figure(
+    save_reconstruction_figure(
         model=model,
         test_loader=vis_loader,
         device=device,
@@ -180,7 +157,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         max_frames_per_clip=max_frames,
         plot_masked=False,
     )
-    save_test_reconstruction_figure(
+    save_reconstruction_figure(
         model=model,
         test_loader=vis_loader,
         device=device,
@@ -196,6 +173,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         "config": args.config,
         "target_files": list(args.target_files),
         "n_matched": len(selected),
+        "selection": selection_meta,
         "metrics": metrics,
         "out_dir": str(out_dir),
     }
