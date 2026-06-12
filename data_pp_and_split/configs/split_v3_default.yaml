@@ -1,0 +1,26 @@
+# Session×condition group split (v3) — re-split without re-ingesting H5s.
+# Run: PYTHONPATH=. python data_pp_and_split/scripts/run_split.py
+
+index_path: null  # default: Data/FoundationData/ProcessedData/splits/all_trials_index.csv
+
+legacy_split_csv: Data/FoundationData/ProcessedData/splits/split_v2_seed17_session_split.csv
+
+split:
+  version: v3
+  seed: 17
+  train_frac: 0.75
+  val_frac: 0.15
+  test_frac: 0.10
+  stratify_level: session_condition_group
+
+  manual_assignments:
+    test: []
+    val: []
+    train: []
+
+baseline:
+  frames_start: 5
+  frames_end: 25  # exclusive slice end (frames 5–24), matches legacy notebook
+
+output:
+  splits_dir: Data/FoundationData/ProcessedData/splits
