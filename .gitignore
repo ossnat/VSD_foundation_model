@@ -216,8 +216,10 @@ cache/
 _snr_demo/
 
 checkpoints/
+checkpoints_*/
 checkpoints_hpo/
 checkpoints_mae2d/
+CHECK_PTS/
 docs/
 local_splits/
 logs/
