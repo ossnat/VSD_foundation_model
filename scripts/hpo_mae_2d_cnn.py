@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-MAE 2D CNN hyperparameter study (step 1 of a 3-model HPO split).
+MAE 2D CNN hyperparameter study (v3 split).
 
 Three phases (run all or individually via --phase):
-  1) hparam   — random search over MAE-2D-relevant knobs (loss, lr, wd, hidden_dim, mask_ratio)
+  1) hparam   — random search: loss (incl. l1_ssim), mask_ratio, patch_size, crop_frame,
+                batch_size+lr pairs, hidden_dim, weight_decay
   2) scheduler — fixed LR vs cosine+warmup (best hparams from phase 1)
   3) early_stop — no early stopping vs patience-based stop (best scheduler from phase 2)
 
@@ -12,8 +13,9 @@ Each trial writes under ``<output_dir>/<phase>/<trial_name>/``:
   - summary CSV/JSON and comparison bar charts under ``<output_dir>/summary/``
 
 Usage (repo root):
-  PYTHONPATH=. python scripts/hpo_mae_2d_cnn.py --output-dir runs/hpo_mae2d_cnn
+  PYTHONPATH=. python scripts/hpo_mae_2d_cnn.py --config configs/MAE_2D_hpo.yaml
   PYTHONPATH=. python scripts/hpo_mae_2d_cnn.py --phase hparam --quick
+  sbatch run_2dcnn_hpo.sh
 """
 
 from __future__ import annotations
@@ -48,7 +50,27 @@ from src.models import build_ssl_model
 from src.training.trainer import Trainer
 from src.utils.logger import TBLogger, set_seed
 
-LOSS_TYPES = ("mse", "l1", "l1_mse")
+LOSS_TYPES = ("l1_ssim", "l1", "l1_mse", "mse")
+LOSS_WEIGHTS = (0.45, 0.25, 0.15, 0.15)
+SSIM_ALPHAS = (0.7, 0.84, 0.9)
+PATCH_SIZES: Tuple[Tuple[int, int, int], ...] = (
+    (1, 8, 8),
+    (1, 4, 4),
+    (1, 16, 16),
+    (1, 2, 2),
+)
+BATCH_LR_PAIRS: Tuple[Tuple[int, float], ...] = (
+    (32, 5e-5),
+    (64, 8e-5),
+    (128, 1e-4),
+    (256, 1e-4),
+)
+CROP_ARMS: Tuple[Tuple[Optional[str], Optional[int]], ...] = (
+    (None, None),
+    ("circle", 30),
+    ("circle", 35),
+    ("circle", 40),
+)
 PHASES = ("hparam", "scheduler", "early_stop", "all")
 
 
@@ -87,7 +109,7 @@ class TrialResult:
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="MAE 2D CNN HPO (3-phase study).")
-    p.add_argument("--config", type=str, default="configs/MAE_2D_full.yaml")
+    p.add_argument("--config", type=str, default="configs/MAE_2D_hpo.yaml")
     p.add_argument(
         "--phase",
         type=str,
@@ -100,8 +122,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--ranking-metric", type=str, default="ssim_masked")
     p.add_argument("--ranking-mode", type=str, choices=("max", "min"), default="max")
 
-    p.add_argument("--hparam-trials", type=int, default=8, help="Random trials in phase 1.")
-    p.add_argument("--epochs", type=int, default=15, help="Max epochs per trial.")
+    p.add_argument("--hparam-trials", type=int, default=24, help="Random trials in phase 1.")
+    p.add_argument("--epochs", type=int, default=12, help="Max epochs per trial.")
     p.add_argument("--quick", action="store_true", help="Fewer trials/epochs and data cap.")
     p.add_argument("--max-train-samples", type=int, default=None)
     p.add_argument("--max-val-samples", type=int, default=None)
@@ -111,6 +133,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--batch-size", type=int, default=None)
     p.add_argument("--frame-start", type=int, default=None)
     p.add_argument("--frame-end", type=int, default=None)
+    p.add_argument(
+        "--val-frame-stride",
+        type=int,
+        default=None,
+        help="Val/test frame stride during HPO (default: from YAML, usually 3).",
+    )
     p.add_argument("--train-num-workers", type=int, default=4)
     p.add_argument("--val-num-workers", type=int, default=2)
     p.add_argument("--test-num-workers", type=int, default=2)
@@ -170,14 +198,26 @@ def _save_csv(rows: List[Dict[str, Any]], path: Path) -> None:
             w.writerow(r)
 
 
-def _sample_hparams(rng: random.Random) -> Dict[str, Any]:
-    loss_type = rng.choice(list(LOSS_TYPES))
+def _sample_hparams(rng: random.Random, *, quick: bool = False) -> Dict[str, Any]:
+    loss_type = rng.choices(LOSS_TYPES, weights=LOSS_WEIGHTS, k=1)[0]
+    batch_size, lr = rng.choice(BATCH_LR_PAIRS)
+
+    patch_pool = PATCH_SIZES[:3] if quick else PATCH_SIZES
+    patch_size = list(rng.choice(patch_pool))
+
+    crop_pool = ((None, None), ("circle", 35)) if quick else CROP_ARMS
+    crop_frame, crop_radius = rng.choice(crop_pool)
+
     hp: Dict[str, Any] = {
         "loss_type": loss_type,
-        "lr": 10 ** rng.uniform(math.log10(3e-5), math.log10(3e-4)),
-        "weight_decay": 10 ** rng.uniform(math.log10(1e-3), math.log10(8e-2)),
-        "hidden_dim": rng.choice([128, 256, 384]),
-        "mask_ratio": rng.choice([0.5, 0.6, 0.75]),
+        "lr": lr,
+        "batch_size": batch_size,
+        "weight_decay": rng.choice([0.01, 0.03, 0.05]),
+        "hidden_dim": rng.choice([256, 384]),
+        "mask_ratio": rng.choice([0.5, 0.75, 0.85]),
+        "patch_size": patch_size,
+        "crop_frame": crop_frame,
+        "crop_radius": crop_radius,
         "scheduler_type": "none",
         "early_stopping": False,
         "auto_resume": False,
@@ -185,8 +225,10 @@ def _sample_hparams(rng: random.Random) -> Dict[str, Any]:
         "use_amp": False,
         "clip_length": 1,
     }
-    if loss_type == "l1_mse":
-        hp["alpha"] = rng.choice([0.3, 0.5, 0.7, 0.84])
+    if loss_type == "l1_ssim":
+        hp["alpha"] = rng.choice(SSIM_ALPHAS)
+    elif loss_type == "l1_mse":
+        hp["alpha"] = rng.choice([0.5, 0.7, 0.84])
     return hp
 
 
@@ -209,6 +251,8 @@ def _base_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         o["frame_start"] = int(args.frame_start)
     if args.frame_end is not None:
         o["frame_end"] = int(args.frame_end)
+    if args.val_frame_stride is not None:
+        o["val_frame_stride"] = int(args.val_frame_stride)
     return o
 
 
@@ -225,10 +269,11 @@ def _build_loaders(
     )
     cfg["model"] = "mae_2d"
     cfg["clip_length"] = 1
+    effective_bs = args.batch_size or overrides.get("batch_size") or cfg.get("batch_size")
     train_loader, val_loader, test_loader = build_dataloaders(
         cfg,
         project_root=project_root,
-        batch_size=args.batch_size,
+        batch_size=effective_bs,
         train_num_workers=args.train_num_workers,
         val_num_workers=args.val_num_workers,
         test_num_workers=args.test_num_workers,
@@ -328,10 +373,11 @@ def _run_trial(
     cfg["clip_length"] = 1
 
     if cached_loaders is None:
+        effective_bs = args.batch_size or overrides.get("batch_size") or cfg.get("batch_size")
         train_loader, val_loader, test_loader = build_dataloaders(
             cfg,
             project_root=project_root,
-            batch_size=args.batch_size,
+            batch_size=effective_bs,
             train_num_workers=args.train_num_workers,
             val_num_workers=args.val_num_workers,
             test_num_workers=args.test_num_workers,
@@ -399,11 +445,9 @@ def _phase_hparam(
     phase_dir.mkdir(parents=True, exist_ok=True)
     n_trials = 3 if args.quick else args.hparam_trials
 
-    cached = _build_loaders(project_root, args.config, args, {"loss_type": "mse"})
-
     records: List[TrialResult] = []
     for i in range(n_trials):
-        hp = _sample_hparams(rng)
+        hp = _sample_hparams(rng, quick=args.quick)
         tid = f"trial_{i:03d}"
         rec = _run_trial(
             project_root,
@@ -413,7 +457,7 @@ def _phase_hparam(
             phase_dir / tid,
             hp,
             trial_seed=args.seed + i,
-            cached_loaders=cached,
+            cached_loaders=None,
         )
         rec.trial_id = tid
         records.append(rec)
@@ -564,11 +608,13 @@ def main() -> None:
     args = _parse_args()
     if args.quick:
         args.hparam_trials = min(args.hparam_trials, 3)
-        args.epochs = min(args.epochs, 5)
+        args.epochs = min(args.epochs, 3)
         args.max_train_samples = args.max_train_samples or 400
         args.max_val_samples = args.max_val_samples or 120
         args.max_test_samples = args.max_test_samples or 120
         args.early_stopping_patience = min(args.early_stopping_patience, 2)
+        if args.val_frame_stride is None:
+            args.val_frame_stride = 5
 
     project_root = _PROJECT_ROOT
     now = datetime.now().strftime("%Y%m%d_%H%M%S")

@@ -1,8 +1,9 @@
 # ================================================
-# MAE 2D (ResNet18 + MAEDecoder2D) — single-frame / no LSTM
+# MAE 2D — HPO base config (v3 split, faster val during search)
 # ================================================
-# Same data layout as MAE_2D_LSTM_full but clip_length: 1 (2D clips).
-# Usage: PYTHONPATH=. python scripts/train_mae_2d.py --config configs/MAE_2D_full.yaml
+# Usage:
+#   PYTHONPATH=. python scripts/hpo_mae_2d_cnn.py --config configs/MAE_2D_hpo.yaml
+#   sbatch run_2dcnn_hpo.sh
 # ================================================
 
 # --- Model ---
@@ -10,16 +11,16 @@ model: mae_2d
 backbone: resnet18
 pretrained: false
 channels: 1
-hidden_dim: 384 # 256
+hidden_dim: 256
 normalize_loss: true
 crop_loss: null
 crop_loss_radius: 30
-loss_type: "l1"        # "mse" | "l1" | "l1_ssim" | "mse_ssim"
-alpha: 0.84                # only used for *_ssim variants
+loss_type: "l1_ssim"
+alpha: 0.84
 ssim_window_size: 11
 ssim_sigma: 1.5
 
-# --- Data ---
+# --- Data (v3 session×condition group split) ---
 dataset_name: vsd_mae
 split_csv_path: "Data/FoundationData/ProcessedData/splits/split_v3_seed17_session_condition_group.csv"
 stats_json_path: "Data/FoundationData/ProcessedData/splits/baseline_stats_v3_seed17_session_condition_group.json"
@@ -27,38 +28,36 @@ processed_root: "Data/FoundationData/ProcessedData/splits"
 frame_start: 30
 frame_end: 100
 clip_length: 1
-mask_ratio: 0.5
+mask_ratio: 0.75
 patch_size: [1, 8, 8]
 crop_frame: null
 crop_radius: null
-val_frame_stride: 1
-batch_size: 32
+val_frame_stride: 3
+batch_size: 128
 num_workers: 4
 pin_memory: true
 persistent_workers: true
 prefetch_factor: 2
 
-# --- Training ---
-lr: 5.84e-5 # 1.0e-4
-weight_decay: 0.03 # 0.05
-epochs: 100
+# --- Training (epochs overridden per trial by HPO script) ---
+lr: 1.0e-4
+weight_decay: 0.03
+epochs: 12
 max_grad_norm: 1.0
-# LR schedule (Trainer): scheduler_type none | cosine; warmup_epochs; min_lr
 scheduler_type: none
 warmup_epochs: 3
 min_lr: 1.0e-6
-# Early stopping (Trainer): early_stopping true; early_stopping_patience; early_stopping_metric
 early_stopping: false
 early_stopping_patience: 5
 early_stopping_metric: ssim_masked
 early_stopping_mode: max
 early_stopping_min_delta: 1.0e-4
-auto_resume: true
+auto_resume: false
 save_metrics_each_epoch: true
-# CUDA mixed precision (autocast) + l1_ssim often goes NaN; keep FP32 for stable MAE 2D training.
 use_amp: false
-ckpt_dir: ./checkpoints_mae2d
-log_dir: logs_mae2d
+ckpt_dir: ./checkpoints_mae2d_hpo
+log_dir: logs_mae2d_hpo
 seed: 17
 preload_into_ram: true
 plot_retinotopic: false
+temporal_eval_per_metric_plots: true

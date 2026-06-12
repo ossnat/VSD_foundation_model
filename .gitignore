@@ -224,6 +224,8 @@ docs/
 local_splits/
 logs/
 logs_mae2d/
+logs_mae2d_hpo/
+runs/
 scripts/aggregate_hpo_runs.py
 src/.DS_Store
 test_path_resolution_colab.py

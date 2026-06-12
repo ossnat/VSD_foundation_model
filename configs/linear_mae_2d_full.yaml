@@ -22,8 +22,8 @@ linear_l1_penalty: 0.0
 
 # --- Data (match MAE_2D_full paths; adjust for your machine) ---
 dataset_name: vsd_mae
-split_csv_path: "Data/FoundationData/ProcessedData/splits/split_v2_seed17_session_split.csv"
-stats_json_path: "Data/FoundationData/ProcessedData/splits/baseline_stats_v2_seed17_session_split.json"
+split_csv_path: "Data/FoundationData/ProcessedData/splits/split_v3_seed17_session_condition_group.csv"
+stats_json_path: "Data/FoundationData/ProcessedData/splits/baseline_stats_v3_seed17_session_condition_group.json"
 processed_root: "Data/FoundationData/ProcessedData/splits"
 frame_start: 30
 frame_end: 100
