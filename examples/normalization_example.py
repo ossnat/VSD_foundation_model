@@ -25,8 +25,8 @@ def main():
         "normalize": True,
         "normalization_type": "baseline_zscore",
         "baseline_frame": 20,
-        "frame_start": 1,
-        "frame_end": 100,
+        "frame_start": 32,
+        "frame_end": 52,
         "cache_dir": "cache",
         "normalization_kwargs": {"epsilon": 1e-8}
     }
@@ -47,8 +47,8 @@ def main():
         "normalize": True,
         "normalization_type": "baseline_robust",
         "baseline_frame": 20,
-        "frame_start": 0,
-        "frame_end": 100,
+        "frame_start": 32,
+        "frame_end": 52,
         "cache_dir": "cache",
         "normalization_kwargs": {"epsilon": 1e-8}
     }
@@ -67,8 +67,8 @@ def main():
         "dataset": "vsd",
         "vsd_hdf5_path": Path(r"G:\My Drive\HDF5_DATA_AFTER_PREPROCESSING2\vsd_video_data.hdf5"),  # Update this path
         "normalize": False,
-        "frame_start": 0,
-        "frame_end": 100
+        "frame_start": 32,
+        "frame_end": 52
     }
     
     try:
@@ -117,8 +117,8 @@ def demonstrate_direct_dataset_usage():
             normalize=True,
             normalization_type="baseline_zscore",
             baseline_frame=20,
-            frame_start=0,
-            frame_end=100,
+            frame_start=32,
+            frame_end=52,
             cache_dir="cache"
         )
         

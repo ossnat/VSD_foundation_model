@@ -201,8 +201,8 @@ def _base_cfg(
         "split_csv_path": str(split_csv.resolve()),
         "stats_json_path": str(stats_json.resolve()),
         "processed_root": str(artifact_root / "analysis" / "processed_stub"),
-        "frame_start": 30,
-        "frame_end": 100,
+        "frame_start": 32,
+        "frame_end": 52,
         "clip_length": 1,
         "mask_ratio": 0.5,
         "patch_size": patch_size,
@@ -317,7 +317,7 @@ def main() -> None:
         print(f"  HPO will use {len(df_hpo)} rows (subset) -> {hpo_split_csv}")
 
     df_train = df_all[df_all["split"] == "train"]
-    frame_start, frame_end = 30, 100
+    frame_start, frame_end = 32, 52
     print("[2/5] Estimating spatial mean/std on train clips (this can take a minute)...")
     mean_b, std_b, H, W = _spatial_mean_std(df_train, frame_start, frame_end)
     patch_size = (1, 8, 8)

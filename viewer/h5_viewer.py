@@ -531,7 +531,7 @@ def run_viewer(
         ef = end_frame
         if sf is None or ef is None:
             raw = input(
-                f"Enter start and end frame indices (inclusive, 0..{t_max - 1}), e.g. 30 100: "
+                f"Enter start and end frame indices (inclusive, 0..{t_max - 1}), e.g. 32 52: "
             ).strip()
             parts = raw.replace(",", " ").split()
             if len(parts) != 2:

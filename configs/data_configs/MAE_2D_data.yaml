@@ -15,8 +15,8 @@ stats_json_path: "Data/FoundationData/ProcessedData/splits/baseline_stats_v2_see
 processed_root: "Data/FoundationData/ProcessedData/splits"
 
 # --- Frame / clip selection ---
-frame_start: 30               # First frame index to use (0-based)
-frame_end: 100                # Last frame index (inclusive); null = use all
+frame_start: 32               # First frame index to use (0-based)
+frame_end: 52                 # Last frame index (inclusive); null = use all
 clip_length: 1                # Frames per sample (1 = single-frame / 2-D mode)
 
 # --- MAE masking ---

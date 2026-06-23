@@ -131,8 +131,8 @@ def _parse_args() -> argparse.Namespace:
 
     p.add_argument("--monkeys", type=str, nargs="*", default=None)
     p.add_argument("--batch-size", type=int, default=None)
-    p.add_argument("--frame-start", type=int, default=None)
-    p.add_argument("--frame-end", type=int, default=None)
+    p.add_argument("--frame-start", type=int, default=32)
+    p.add_argument("--frame-end", type=int, default=52)
     p.add_argument(
         "--val-frame-stride",
         type=int,
@@ -148,6 +148,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--min-lr", type=float, default=1e-6)
     p.add_argument("--early-stopping-patience", type=int, default=4)
     p.add_argument("--early-stopping-min-delta", type=float, default=1e-4)
+    p.add_argument(
+        "--resume",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Skip trials that already have trial_summary.json under the output dir.",
+    )
     return p.parse_args()
 
 
@@ -186,6 +192,48 @@ def _save_json(obj: Any, path: Path) -> None:
         json.dump(obj, f, indent=2, default=str)
 
 
+def _trial_is_complete(trial_dir: Path) -> bool:
+    return (trial_dir / "trial_summary.json").is_file()
+
+
+def _load_trial_result(
+    trial_dir: Path,
+    phase: str,
+    trial_id: str,
+    args: argparse.Namespace,
+) -> TrialResult:
+    """Reload a finished trial from disk (for --resume)."""
+    summary = json.loads((trial_dir / "trial_summary.json").read_text())
+    hp_path = trial_dir / "hparams.json"
+    hparams = json.loads(hp_path.read_text()) if hp_path.is_file() else {}
+    val_metrics = {
+        k[4:]: v for k, v in summary.items() if k.startswith("val_") and k != "val_"
+    }
+    test_metrics = {k[5:]: v for k, v in summary.items() if k.startswith("test_")}
+    train_history = {
+        "epochs_completed": summary.get("epochs_completed"),
+        "stopped_early": summary.get("stopped_early"),
+    }
+    rank_val = float(summary.get("ranking_value", float("nan")))
+    rec = TrialResult(
+        phase=phase,
+        trial_id=trial_id,
+        seed=int(summary.get("seed", args.seed)),
+        hparams=hparams,
+        val_metrics=val_metrics,
+        test_metrics=test_metrics,
+        train_history=train_history,
+        trial_dir=str(trial_dir),
+        ranking_metric=str(summary.get("ranking_metric", args.ranking_metric)),
+        ranking_value=rank_val,
+    )
+    print(
+        f"[{phase}/{trial_id}] (resumed) {rec.ranking_metric}={rank_val:.6f} "
+        f"epochs={train_history.get('epochs_completed')}"
+    )
+    return rec
+
+
 def _save_csv(rows: List[Dict[str, Any]], path: Path) -> None:
     if not rows:
         return
@@ -214,7 +262,7 @@ def _sample_hparams(rng: random.Random, *, quick: bool = False) -> Dict[str, Any
         "batch_size": batch_size,
         "weight_decay": rng.choice([0.01, 0.03, 0.05]),
         "hidden_dim": rng.choice([256, 384]),
-        "mask_ratio": rng.choice([0.5, 0.75, 0.85]),
+        "mask_ratio": rng.choice([0.5, 0.75]),
         "patch_size": patch_size,
         "crop_frame": crop_frame,
         "crop_radius": crop_radius,
@@ -247,10 +295,8 @@ def _base_overrides(args: argparse.Namespace) -> Dict[str, Any]:
         o["monkeys"] = list(args.monkeys)
     if args.batch_size is not None:
         o["batch_size"] = int(args.batch_size)
-    if args.frame_start is not None:
-        o["frame_start"] = int(args.frame_start)
-    if args.frame_end is not None:
-        o["frame_end"] = int(args.frame_end)
+    o["frame_start"] = int(args.frame_start)
+    o["frame_end"] = int(args.frame_end)
     if args.val_frame_stride is not None:
         o["val_frame_stride"] = int(args.val_frame_stride)
     return o
@@ -447,14 +493,19 @@ def _phase_hparam(
 
     records: List[TrialResult] = []
     for i in range(n_trials):
-        hp = _sample_hparams(rng, quick=args.quick)
         tid = f"trial_{i:03d}"
+        trial_dir = phase_dir / tid
+        if args.resume and _trial_is_complete(trial_dir):
+            records.append(_load_trial_result(trial_dir, "hparam", tid, args))
+            continue
+
+        hp = _sample_hparams(rng, quick=args.quick)
         rec = _run_trial(
             project_root,
             args,
             "hparam",
             tid,
-            phase_dir / tid,
+            trial_dir,
             hp,
             trial_seed=args.seed + i,
             cached_loaders=None,
@@ -492,13 +543,17 @@ def _phase_scheduler(
     ]
     records: List[TrialResult] = []
     for i, (name, sched_hp) in enumerate(arms):
+        trial_dir = phase_dir / name
+        if args.resume and _trial_is_complete(trial_dir):
+            records.append(_load_trial_result(trial_dir, "scheduler", name, args))
+            continue
         hp = {**base_hp, **sched_hp}
         rec = _run_trial(
             project_root,
             args,
             "scheduler",
             name,
-            phase_dir / name,
+            trial_dir,
             hp,
             trial_seed=args.seed + 100 + i,
         )
@@ -536,13 +591,17 @@ def _phase_early_stop(
     ]
     records: List[TrialResult] = []
     for i, (name, es_hp) in enumerate(arms):
+        trial_dir = phase_dir / name
+        if args.resume and _trial_is_complete(trial_dir):
+            records.append(_load_trial_result(trial_dir, "early_stop", name, args))
+            continue
         hp = {**base_hp, **es_hp}
         rec = _run_trial(
             project_root,
             args,
             "early_stop",
             name,
-            phase_dir / name,
+            trial_dir,
             hp,
             trial_seed=args.seed + 200 + i,
         )

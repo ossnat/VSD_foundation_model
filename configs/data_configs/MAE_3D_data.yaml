@@ -14,8 +14,8 @@ stats_json_path: "Data/FoundationData/ProcessedData/splits/baseline_stats_v1_see
 processed_root: "Data/FoundationData/ProcessedData/splits"
 
 # --- Frame / clip selection (3D: use multiple frames per sample) ---
-frame_start: 30
-frame_end: 100
+frame_start: 32
+frame_end: 52
 clip_length: 8                # Frames per sample (e.g. 8 or 16 for 3D MAE)
 
 # --- MAE masking (3D patches) ---

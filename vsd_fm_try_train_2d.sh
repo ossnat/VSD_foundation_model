@@ -32,7 +32,8 @@ CONDA_ENV="${CONDA_ENV:-vsd_conda_env}"
 
 EPOCHS="${EPOCHS:-2}"
 BATCH_SIZE="${BATCH_SIZE:-16}"
-FRAME_END="${FRAME_END:-50}"
+FRAME_START="${FRAME_START:-32}"
+FRAME_END="${FRAME_END:-52}"
 
 JOB_TAG="${SLURM_JOB_ID:-local}"
 RUN_DIR="${RUN_DIR:-${REPO}/runs/mae2d_gandalf_try_${JOB_TAG}}"
@@ -72,6 +73,7 @@ python scripts/train_mae_2d.py \
   --monkeys gandalf \
   --epochs "${EPOCHS}" \
   --batch-size "${BATCH_SIZE}" \
+  --frame-start "${FRAME_START}" \
   --frame-end "${FRAME_END}" \
   --no-preload-into-ram \
   --no-auto-resume \

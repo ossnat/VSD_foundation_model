@@ -26,6 +26,10 @@
 #   HPARAM_TRIALS=24         — phase-1 trial count
 #   EPOCHS=12                — epochs per trial
 #   OUT_DIR=/path/to/runs/…  — custom output directory
+#
+# Resume (reuse completed trials 0–10, continue from 11+):
+#   OUT_DIR=/path/to/runs/hpo_mae2d_v3_<JOBID> sbatch run_2dcnn_hpo.sh
+#   Completed trials are skipped when trial_summary.json exists (--resume, default on).
 
 set -euo pipefail
 
@@ -46,7 +50,13 @@ EXTRA_ARGS=(
   --ranking-metric ssim_masked
   --ranking-mode max
   --val-frame-stride 3
+  --frame-start 32
+  --frame-end 52
 )
+
+if [[ "${RESUME:-1}" == "0" ]]; then
+  EXTRA_ARGS+=(--no-resume)
+fi
 
 if [[ "${QUICK:-0}" == "1" ]]; then
   EXTRA_ARGS+=(--quick --phase all)

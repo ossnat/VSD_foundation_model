@@ -121,7 +121,8 @@ if [[ "${MINI_TRAIN:-0}" == "1" ]]; then
     --monkeys gandalf \
     --epochs 1 \
     --batch-size 8 \
-    --frame-end 40 \
+    --frame-start 32 \
+    --frame-end 52 \
     --no-preload-into-ram \
     --no-auto-resume \
     --ckpt-dir "${RUN_DIR}/ckpt" \
