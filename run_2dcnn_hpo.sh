@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=mae2d_hpo_v3
-#SBATCH --output=mae2d_hpo_v3_%j.out
-#SBATCH --error=mae2d_hpo_v3_%j.err
+#SBATCH --output=slurm_err_out/mae2d_hpo_v3_%j.out
+#SBATCH --error=slurm_err_out/mae2d_hpo_v3_%j.err
 #SBATCH --partition=generic
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --time=24:00:00
+#SBATCH --time=04:00:00
 #SBATCH --chdir=/home/dsi/ossnat/VSD_FM/VSD_foundation_model
 
 # MAE 2D CNN HPO on v3 session×condition group split.
