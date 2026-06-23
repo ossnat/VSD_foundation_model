@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=24:00:00
-#SBATCH --chdir=/home/lab/ossnat/VSD_FM/VSD_foundation_model
+#SBATCH --chdir=/home/dsi/ossnat/VSD_FM/VSD_foundation_model
 
 # MAE 2D CNN HPO on v3 session×condition group split.
 #
@@ -22,14 +22,14 @@
 #   QUICK=1 bash run_2dcnn_hpo.sh
 #
 # Optional env vars:
-#   MONKEYS="frodo"          — restrict to one monkey (faster debug)
+#   MONKEYS="gandalf"          — restrict to one monkey (faster debug)
 #   HPARAM_TRIALS=24         — phase-1 trial count
 #   EPOCHS=12                — epochs per trial
 #   OUT_DIR=/path/to/runs/…  — custom output directory
 
 set -euo pipefail
 
-REPO="${REPO:-/home/lab/ossnat/VSD_FM/VSD_foundation_model}"
+REPO="${REPO:-/home/dsi/ossnat/VSD_FM/VSD_foundation_model}"
 JOB_TAG="${SLURM_JOB_ID:-local}"
 OUT_DIR="${OUT_DIR:-${REPO}/runs/hpo_mae2d_v3_${JOB_TAG}}"
 CONFIG="${CONFIG:-configs/MAE_2D_hpo.yaml}"

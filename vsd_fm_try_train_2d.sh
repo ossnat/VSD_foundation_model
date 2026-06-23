@@ -1,29 +1,34 @@
 #!/bin/bash
 #SBATCH --job-name=vsd_mae2d_gandalf
-#SBATCH --output=vsd_mae2d_gandalf_%j.out
-#SBATCH --error=vsd_mae2d_gandalf_%j.err
+#SBATCH --output=slurm_err_out/vsd_mae2d_gandalf_%j.out
+#SBATCH --error=slurm_err_out/vsd_mae2d_gandalf_%j.err
 #SBATCH --partition=generic
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=03:00:00
-#SBATCH --chdir=/home/lab/ossnat/VSD_FM/VSD_foundation_model
+#SBATCH --chdir=/home/dsi/ossnat/VSD_FM/VSD_foundation_model
 
 # Short end-to-end MAE 2D training on gandalf (generic GPU partition).
 # Layout: <workspace>/Data/... sibling of this repo (see src/utils/data_paths.py).
 #
 # Submit from repo root:
+#   mkdir -p slurm_err_out
 #   sbatch vsd_fm_try_train_2d.sh
 #
 # Override paths or run length, e.g.:
 #   REPO=/path/to/VSD_foundation_model EPOCHS=3 sbatch vsd_fm_try_train_2d.sh
+#   ENV_KIND=conda sbatch vsd_fm_try_train_2d.sh
 
 set -euo pipefail
 
-REPO="${REPO:-/home/lab/ossnat/VSD_FM/VSD_foundation_model}"
+REPO="${REPO:-/home/dsi/ossnat/VSD_FM/VSD_foundation_model}"
 WORKSPACE="${WORKSPACE:-$(dirname "${REPO}")}"
 DATA_ROOT="${DATA_ROOT:-${WORKSPACE}/Data}"
 GANDALF_DIR="${GANDALF_DIR:-${DATA_ROOT}/FoundationData/ProcessedData/gandalf}"
+
+ENV_KIND="${ENV_KIND:-venv}"
+CONDA_ENV="${CONDA_ENV:-vsd_conda_env}"
 
 EPOCHS="${EPOCHS:-2}"
 BATCH_SIZE="${BATCH_SIZE:-16}"
@@ -34,10 +39,11 @@ RUN_DIR="${RUN_DIR:-${REPO}/runs/mae2d_gandalf_try_${JOB_TAG}}"
 CKPT_DIR="${CKPT_DIR:-${RUN_DIR}/ckpt}"
 LOG_DIR="${LOG_DIR:-${RUN_DIR}/logs}"
 
+mkdir -p "${REPO}/slurm_err_out"
 cd "${REPO}"
-source .venv/bin/activate
 
-export PYTHONPATH="${REPO}${PYTHONPATH:+:${PYTHONPATH}}"
+# shellcheck disable=SC1091
+source "${REPO}/scripts/activate_cluster_env.sh"
 
 echo "=== VSD FM MAE 2D train (gandalf) ==="
 echo "Host:     $(hostname)"
@@ -48,6 +54,7 @@ echo "Workspace:${WORKSPACE}"
 echo "Data:     ${DATA_ROOT}"
 echo "Gandalf:  ${GANDALF_DIR}"
 echo "Run dir:  ${RUN_DIR}"
+echo "ENV_KIND: ${ENV_KIND}"
 echo "Python:   $(which python)"
 python --version
 echo "CUDA:     $(python -c 'import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else "n/a")')"

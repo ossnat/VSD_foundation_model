@@ -6,11 +6,11 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=4G
 #SBATCH --time=00:15:00
-#SBATCH --chdir=/home/lab/ossnat/VSD_FM/VSD_foundation_model
+#SBATCH --chdir=/home/dsi/ossnat/VSD_FM/VSD_foundation_model
 
 set -euo pipefail
 
-REPO="${REPO:-/home/lab/ossnat/VSD_FM/VSD_foundation_model}"
+REPO="${REPO:-/home/dsi/ossnat/VSD_FM/VSD_foundation_model}"
 
 cd "${REPO}"
 source .venv/bin/activate
