@@ -39,23 +39,28 @@ def _filter_split_csv_missing_files(
     exists_mask_series = pd.Series(exists_mask)
     kept = int(exists_mask_series.sum())
     total = len(exists_mask_series)
-    if kept == total:
-        print("[build_dataloaders] All target_file entries exist on disk; using original split CSV.")
-        return split_csv_path
 
-    print(
-        f"[build_dataloaders] Warning: {total - kept} of {total} rows in split CSV refer to "
-        f"missing H5 files. They will be skipped."
-    )
-    df_filtered = df[exists_mask_series.values].copy()
-    # Overwrite target_file with absolute, existing paths so dataset code can open them
-    df_filtered.loc[:, "target_file"] = [p for i, p in enumerate(resolved_paths) if exists_mask_series.iloc[i]]
+    if kept == 0:
+        raise FileNotFoundError(
+            f"No H5 files from split CSV exist on disk ({total} rows). "
+            "Expected Data/ under the workspace sibling of VSD_foundation_model."
+        )
+
+    df_out = df[exists_mask_series.values].copy()
+    df_out["target_file"] = [p for i, p in enumerate(resolved_paths) if exists_mask_series.iloc[i]]
 
     out_dir = project_root / "local_splits"
     os.makedirs(out_dir, exist_ok=True)
     out_path = out_dir / csv_path.name
-    df_filtered.to_csv(out_path, index=False)
-    print(f"[build_dataloaders] Wrote filtered split CSV to {out_path}")
+    df_out.to_csv(out_path, index=False)
+
+    if kept == total:
+        print(f"[build_dataloaders] Resolved {total} target_file paths -> {out_path}")
+    else:
+        print(
+            f"[build_dataloaders] Warning: {total - kept} of {total} rows refer to missing H5 files; "
+            f"wrote {kept} rows to {out_path}"
+        )
     return str(out_path)
 
 
