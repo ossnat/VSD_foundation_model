@@ -220,6 +220,7 @@ checkpoints_*/
 checkpoints_hpo/
 checkpoints_mae2d/
 CHECK_PTS/
+Gandalf_checkpnt_res*/
 docs/
 local_splits/
 logs/
