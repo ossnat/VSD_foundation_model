@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from data_pp_and_split.src.index_build import validate_index
 from data_pp_and_split.src.paths import normalize_target_file, splits_dir
 
 _CONDITION_RE = re.compile(r"conds?X?AN(\d+)", re.IGNORECASE)
@@ -58,4 +59,5 @@ def load_index(index_path: Path | None = None) -> pd.DataFrame:
         + "||"
         + df["condition"].astype(str)
     )
+    validate_index(df, label=str(index_path))
     return df

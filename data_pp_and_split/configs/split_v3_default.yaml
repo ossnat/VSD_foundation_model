@@ -1,5 +1,10 @@
 # Session×condition group split (v3) — re-split without re-ingesting H5s.
-# Run: PYTHONPATH=. python data_pp_and_split/scripts/run_split.py
+#
+# 1) Rebuild index from H5 metadata (fixes trial_dataset ↔ condition mapping):
+#      PYTHONPATH=. python data_pp_and_split/scripts/rebuild_index.py
+#    Use --allow-missing-h5 only for partial local rebuilds.
+# 2) Generate split + baseline stats:
+#      PYTHONPATH=. python data_pp_and_split/scripts/run_split.py
 
 index_path: null  # default: Data/FoundationData/ProcessedData/splits/all_trials_index.csv
 

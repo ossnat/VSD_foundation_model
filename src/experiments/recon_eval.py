@@ -263,20 +263,36 @@ def build_single_h5_split_csv(
     return csv_path
 
 
-def find_sample_index(dataset: Any, trial_dataset: str, frame_no: int) -> int:
+def find_sample_index(
+    dataset: Any,
+    trial_dataset: str,
+    frame_no: int,
+    *,
+    h5_basename: str | None = None,
+) -> int:
     trial_name = normalize_trial_name(trial_dataset)
+    wanted_h5 = Path(h5_basename).name if h5_basename else None
     matches: List[int] = []
     for i, (row_idx, clip_start) in enumerate(dataset.data_structure):
         row = dataset.trials.iloc[row_idx]
         ds_name = str(row["trial_dataset"])
         if ds_name != trial_name and not ds_name.endswith("/" + trial_name):
             continue
+        if wanted_h5:
+            tf = str(row.get("target_file", ""))
+            if Path(tf).name != wanted_h5 and not tf.endswith(wanted_h5):
+                continue
         if int(clip_start) == int(frame_no):
             matches.append(i)
     if not matches:
-        raise ValueError(f"No sample for trial={trial_name!r} frame={frame_no}")
+        hint = f" h5={wanted_h5!r}" if wanted_h5 else ""
+        raise ValueError(f"No sample for trial={trial_name!r} frame={frame_no}{hint}")
     if len(matches) > 1:
-        return matches[0]
+        raise ValueError(
+            f"Ambiguous sample for trial={trial_name!r} frame={frame_no}"
+            + (f" h5={wanted_h5!r}" if wanted_h5 else " (add h5 to disambiguate)")
+            + f": {len(matches)} matches"
+        )
     return matches[0]
 
 

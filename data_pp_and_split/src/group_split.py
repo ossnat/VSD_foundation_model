@@ -123,3 +123,13 @@ def group_leak_check(df: pd.DataFrame) -> None:
     bad = per_group[per_group > 1]
     if len(bad):
         raise AssertionError(f"Groups span multiple splits: {bad.index.tolist()[:5]}")
+
+
+def physical_split_leak_check(df: pd.DataFrame) -> None:
+    """Ensure each (H5, trial_dataset) appears in at most one split."""
+    per_trial = df.groupby(["target_file", "trial_dataset"])["split"].nunique()
+    bad = per_trial[per_trial > 1]
+    if len(bad):
+        raise AssertionError(
+            f"Physical trials span multiple splits ({len(bad)} cases), e.g. {bad.index[:3].tolist()}"
+        )

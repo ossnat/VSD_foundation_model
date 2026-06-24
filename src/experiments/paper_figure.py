@@ -151,14 +151,17 @@ def _default_panel_caption(
             kind_desc.append("Red = spatially scrambled controls")
         return (
             f"Panel {letter}. {title}. "
-            f"Each point is one frame sampled from {_trials_description(scatter_trials)} "
-            f"(frames {frame_start}–{frame_end}, up to {n_points} points, seed-controlled). "
+            f"Each point is one frame sampled from v3 {data_cfg.get('split', 'test')} split"
+            + (f" ({', '.join(data_cfg['monkeys'])})" if data_cfg.get("monkeys") else "")
+            + f" (frames {frame_start}–{frame_end}, up to {n_points} points, seed-controlled). "
             f"X-axis: {label_for_metric(x_m)}; Y-axis: {label_for_metric(y_m)}. "
             f"{'; '.join(kind_desc)}."
         )
 
-    trial, frame_no = _resolve_panel_frame(panel, default_trial)
+    trial, frame_no, h5 = _resolve_panel_frame(panel, default_trial)
     trial_frame = f"{trial}, frame {frame_no}"
+    if h5:
+        trial_frame += f" ({h5})"
 
     templates = {
         "mask_only": (
@@ -491,16 +494,42 @@ def collect_scatter_series(
     return ScatterSeries(x_metric, y_metric, real_pts, scr_pts)
 
 
-def _resolve_panel_frame(panel: Dict[str, Any], default_trial: str) -> Tuple[str, int]:
+def _h5_basename(h5: str | None) -> str | None:
+    if not h5:
+        return None
+    return Path(h5).name
+
+
+def _frame_asset_key(trial: str, frame_no: int, h5: str | None = None) -> Tuple[str, int, str]:
+    return (normalize_trial_name(trial), int(frame_no), _h5_basename(h5) or "")
+
+
+def _h5_lookup_from_figure(figure_cfg: Dict[str, Any], default_trial: str) -> Dict[Tuple[str, int], str | None]:
+    """Map (trial, frame) -> optional h5 basename from YAML specs and image panels."""
+    out: Dict[Tuple[str, int], str | None] = {}
+    for spec in figure_cfg.get("detail_frame_specs") or []:
+        trial = normalize_trial_name(spec.get("trial", default_trial))
+        frame_no = int(spec["frame"])
+        out[(trial, frame_no)] = _h5_basename(spec.get("h5"))
+    for panel in figure_cfg.get("figure", {}).get("panels") or []:
+        if str(panel.get("type", "")).lower() == "scatter" or "frame" not in panel:
+            continue
+        trial = normalize_trial_name(panel.get("trial", default_trial))
+        frame_no = int(panel["frame"])
+        out[(trial, frame_no)] = _h5_basename(panel.get("h5"))
+    return out
+
+
+def _resolve_panel_frame(panel: Dict[str, Any], default_trial: str) -> Tuple[str, int, str | None]:
     trial = normalize_trial_name(panel.get("trial", default_trial))
     if "frame" not in panel:
         raise ValueError(f"Panel {panel.get('type')} requires 'frame'")
-    return trial, int(panel["frame"])
+    return trial, int(panel["frame"]), _h5_basename(panel.get("h5"))
 
 
 def compose_paper_figure(
     panels: Sequence[Dict[str, Any]],
-    frame_assets: Dict[Tuple[str, int], FrameArrays],
+    frame_assets: Dict[Tuple[str, int, str], FrameArrays],
     scatters: Dict[Tuple[str, str], ScatterSeries],
     out_path: Path,
     *,
@@ -579,10 +608,10 @@ def compose_paper_figure(
             title = panel.get("title", f"{label_for_metric(x_m)} vs {label_for_metric(y_m)}")
 
         else:
-            trial, frame_no = _resolve_panel_frame(panel, panel.get("trial", default_trial))
-            assets = frame_assets.get((trial, frame_no))
+            trial, frame_no, h5 = _resolve_panel_frame(panel, panel.get("trial", default_trial))
+            assets = frame_assets.get(_frame_asset_key(trial, frame_no, h5))
             if assets is None:
-                raise KeyError(f"Missing frame assets for trial={trial} frame={frame_no}")
+                raise KeyError(f"Missing frame assets for trial={trial} frame={frame_no} h5={h5!r}")
 
             if ptype == "mask_only":
                 ax.imshow(assets.mask_only, cmap="gray", vmin=0, vmax=1)
@@ -769,10 +798,12 @@ def run_paper_figure_job(
         )
         dataset = dataset_loader.dataset
 
-    frame_assets: Dict[Tuple[str, int], FrameArrays] = {}
+    frame_assets: Dict[Tuple[str, int, str], FrameArrays] = {}
+    h5_lookup = _h5_lookup_from_figure(figure_cfg, default_trial)
 
     for trial, frame_no in detail_specs:
-        idx = find_sample_index(dataset, trial, frame_no)
+        h5 = h5_lookup.get((trial, frame_no))
+        idx = find_sample_index(dataset, trial, frame_no, h5_basename=h5)
         batch = dataset[idx]
         batch_b = {
             k: (v.unsqueeze(0) if torch.is_tensor(v) else v)
@@ -780,7 +811,7 @@ def run_paper_figure_job(
             if k in ("video_masked", "video_target", "mask", "start_frame", "end_frame")
         }
         arrays = _arrays_from_batch(batch_b, model, device, patch_size, trial, frame_no)
-        frame_assets[(trial, frame_no)] = arrays
+        frame_assets[_frame_asset_key(trial, frame_no, h5)] = arrays
         export_frame_assets(arrays, out_dir, cmap=figure_cfg.get("figure", {}).get("cmap", "hot"))
 
     scatter_cfg = figure_cfg.get("scatter", {})
