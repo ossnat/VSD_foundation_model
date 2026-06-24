@@ -1,9 +1,9 @@
 # ================================================
 # MAE 2D — full training config (HPO trial_017, mask_ratio 0.75)
 # ================================================
-# Selected from cluster HPO run hpo_mae2d_v3_16881312:
-#   trial_017 — best val_ssim_masked among mask_ratio=0.75 trials (frames 32–52)
-#   val_ssim_masked=0.506, test_ssim_masked=0.408 @ 12 HPO epochs
+# HPO hparams from cluster run hpo_mae2d_v3_16881312 trial_017 (mask 0.75, frames 32–52).
+# Split: Gandalf-only v3 session×condition group (corrected index, seed 17).
+# Re-run HPO after full multi-monkey split is available on cluster.
 #
 # Usage:
 #   PYTHONPATH=. python scripts/train_mae_2d.py --config configs/MAE_2D_best_mask75.yaml
@@ -24,10 +24,10 @@ loss_type: "mse"
 ssim_window_size: 11
 ssim_sigma: 1.5
 
-# --- Data (v3 session×condition group split) ---
+# --- Data (Gandalf-only v3 session×condition group split) ---
 dataset_name: vsd_mae
-split_csv_path: "Data/FoundationData/ProcessedData/splits/split_v3_seed17_session_condition_group.csv"
-stats_json_path: "Data/FoundationData/ProcessedData/splits/baseline_stats_v3_seed17_session_condition_group.json"
+split_csv_path: "Data/FoundationData/ProcessedData/splits/split_v3_seed17_session_condition_group_gandalf.csv"
+stats_json_path: "Data/FoundationData/ProcessedData/splits/baseline_stats_v3_seed17_session_condition_group_gandalf.json"
 processed_root: "Data/FoundationData/ProcessedData/splits"
 frame_start: 32
 frame_end: 52
