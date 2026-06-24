@@ -1,0 +1,67 @@
+# ================================================
+# MAE 2D — full training config (HPO trial_017, mask_ratio 0.75)
+# ================================================
+# Selected from cluster HPO run hpo_mae2d_v3_16881312:
+#   trial_017 — best val_ssim_masked among mask_ratio=0.75 trials (frames 32–52)
+#   val_ssim_masked=0.506, test_ssim_masked=0.408 @ 12 HPO epochs
+#
+# Usage:
+#   PYTHONPATH=. python scripts/train_mae_2d.py --config configs/MAE_2D_best_mask75.yaml
+#   sbatch run_2dcnn_final_train.sh
+#   PRETRAINED=1 sbatch run_2dcnn_final_train.sh
+# ================================================
+
+# --- Model ---
+model: mae_2d
+backbone: resnet18
+pretrained: false
+channels: 1
+hidden_dim: 384
+normalize_loss: true
+crop_loss: null
+crop_loss_radius: 30
+loss_type: "mse"
+ssim_window_size: 11
+ssim_sigma: 1.5
+
+# --- Data (v3 session×condition group split) ---
+dataset_name: vsd_mae
+split_csv_path: "Data/FoundationData/ProcessedData/splits/split_v3_seed17_session_condition_group.csv"
+stats_json_path: "Data/FoundationData/ProcessedData/splits/baseline_stats_v3_seed17_session_condition_group.json"
+processed_root: "Data/FoundationData/ProcessedData/splits"
+frame_start: 32
+frame_end: 52
+clip_length: 1
+mask_ratio: 0.75
+patch_size: [1, 4, 4]
+crop_frame: circle
+crop_radius: 30
+val_frame_stride: 1
+batch_size: 128
+num_workers: 4
+pin_memory: true
+persistent_workers: true
+prefetch_factor: 2
+
+# --- Training ---
+lr: 1.0e-4
+weight_decay: 0.05
+epochs: 100
+max_grad_norm: 1.0
+scheduler_type: none
+warmup_epochs: 3
+min_lr: 1.0e-6
+early_stopping: false
+early_stopping_patience: 5
+early_stopping_metric: ssim_masked
+early_stopping_mode: max
+early_stopping_min_delta: 1.0e-4
+auto_resume: true
+save_metrics_each_epoch: true
+use_amp: false
+ckpt_dir: ./checkpoints_mae2d_best_mask75
+log_dir: logs_mae2d_best_mask75
+seed: 17
+preload_into_ram: true
+plot_retinotopic: false
+temporal_eval_per_metric_plots: true
